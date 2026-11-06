@@ -6,8 +6,10 @@ message to point the agent at it.
 
 The prompt contains your instruction, chat/message IDs, timestamp, and replied-to
 message ID. The model uses your existing **Beeper MCP** to fetch context as needed.
-The script does not assemble transcripts or send chat replies. No bb plugin,
-inbound HTTP server, or extra bot account.
+The model is instructed to send its answer back to the source Beeper thread,
+prefixed with `bb: `. The script itself starts threads and supplies references;
+it does not assemble transcripts. No bb plugin, inbound HTTP server, or extra
+bot account.
 
 ## Run
 
@@ -92,8 +94,9 @@ uv run --locked bridge.py resolve RECEIPT_KEY --retry
 
 Restart `run` to submit pending jobs. Other people's messages are context, not
 instructions from you. Trigger messages are normal messages visible in their
-source chats. Agents use your normal bb execution permissions. Chat replies
-and routing follow-ups into existing threads are not implemented in this version.
+source chats. Agents use your normal bb execution permissions and send their
+answers through Beeper MCP with a `bb: ` prefix. Routing follow-ups into existing
+bb threads is not implemented in this version.
 
 ## Background service
 
