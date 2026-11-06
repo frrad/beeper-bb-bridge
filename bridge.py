@@ -92,6 +92,8 @@ class Options(argparse.Namespace):
     provider: str | None
     model: str | None
     section: str | None
+    reasoning_level: str | None
+    branch: str | None
     dry_run: bool
     key: str
     thread: str | None
@@ -223,9 +225,13 @@ class Bridge:
         args = self.args
         argv = [args.bb, "thread", "spawn", "--project", args.project, "--prompt-file", "-", "--json"]
         for name, value in (("machine", args.machine), ("provider", args.provider),
-                            ("model", args.model), ("section", args.section)):
+                            ("model", args.model), ("section", args.section),
+                            ("reasoning-level", args.reasoning_level)):
             if value:
                 argv.extend(["--" + name, value])
+        if args.branch:
+            inputs: dict[str, dict[str, str]] = {"branch": {"kind": "existing", "name": args.branch}}
+            argv.extend(["--environment-provider", "project-checkout", "--environment-inputs", json.dumps(inputs)])
         return argv
 
     async def beeper(self, *argv: str) -> object:
@@ -363,6 +369,8 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--bb", default="bb", help="bb executable path")
     for name in ("machine", "provider", "model", "section"):
         run.add_argument("--" + name, help="Pass an explicit override to bb thread spawn")
+    run.add_argument("--reasoning-level", help="Reasoning level supported by the chosen model")
+    run.add_argument("--branch", help="Use the shared project checkout on this existing branch")
     run.add_argument("--dry-run", action="store_true", help="Record matches without spawning; use a separate --state")
     sub.add_parser("jobs", help="List the latest 100 receipts (stop the runner first)")
     resolve = sub.add_parser("resolve", help="Resolve an uncertain spawn after inspecting bb (stop runner first)")
