@@ -15,7 +15,7 @@ Requires Linux/macOS, [uv](https://docs.astral.sh/uv/getting-started/installatio
 (manages **Python 3.11+**), the official
 [Beeper CLI](https://github.com/beeper/cli) with a signed-in headless server target,
 and an authenticated `bb` CLI. The spawned model needs Beeper MCP pointing at
-the same instance, or access to the local Beeper CLI fallback.
+the same instance.
 
 ```sh
 git clone https://github.com/frrad/beeper-bb-bridge.git
@@ -43,22 +43,21 @@ uses its normal project defaults and workspace. `--beeper` and `--bb` accept
 absolute executable paths, useful under a supervisor.
 
 `--dry-run` records matches without invoking bb. It automatically uses a separate
-`.dry-run.sqlite3` database, so it cannot consume real receipts/checkpoints.
+`.dry-run.sqlite3` database, so it cannot consume real receipts.
 The script uses existing CLI authentication. Do not put credentials in arguments
 or this repository.
 
 ## Reliability
 
 - Watches local Beeper events and reconnects with backoff, capped at 30 seconds.
-- First run starts **now**, ignoring old history. Every 60 seconds, a scan of your
-  own messages recovers triggers missed across disconnects/restarts. Scans overlap
-  by a minute for indexing delay. `--sweep-interval` adjusts the interval (min 5).
+- Event-driven only: a Beeper WebSocket event triggers the handler, which checks
+  for your `@bb ` message and invokes `bb thread spawn`. There is no periodic
+  scanning or history catch-up. Messages sent while disconnected can be missed;
+  resend the command after the bridge reconnects.
+- Each run ignores messages older than its startup time. Pending jobs already
+  recorded locally are still processed after a restart.
 - SQLite deduplicates by target + chat ID + message ID across edits, repeated
   events, and restarts. The first accepted instruction wins.
-- Catch-up is capped at 1,000 own messages per scan. At the cap, the checkpoint
-  stays put; narrow watched chats if needed. This is not an unlimited historical
-  import. Indexing delays longer than the overlap can still miss a trigger whose
-  live event was also lost.
 - Pending jobs retain their original bb arguments. A file lock prevents two
   processes using the same state database.
 - If bb fails/times out or the script stops during spawn submission, the receipt
@@ -110,7 +109,7 @@ uv run --locked python -m py_compile bridge.py
 ```
 
 Tests exercise filtering, prompts, restart deduplication, partial events,
-catch-up, uncertain outcomes, dry runs, real subprocess stdin, and shutdown.
+uncertain outcomes, dry runs, real subprocess stdin, and shutdown.
 Fake executables replace Beeper/bb: tests never read/send real chats or start models.
 
 GitHub Actions runs these checks plus a CLI smoke test through uv on Linux/macOS
