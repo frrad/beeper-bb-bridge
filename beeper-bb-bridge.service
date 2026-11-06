@@ -1,0 +1,17 @@
+[Unit]
+Description=Launch bb threads from your own Beeper @bb messages
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Edit paths/project ID. Include bb, beeper, and node directories in PATH.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 %h/Projects/beeper-bb-bridge/bridge.py run --project proj_REPLACE_ME --target server
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+
+[Install]
+WantedBy=default.target
