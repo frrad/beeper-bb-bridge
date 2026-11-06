@@ -68,7 +68,7 @@ def trigger(value: object, target: str, chats: list[str], since: float) -> Job |
 
 def prompt(job: Job) -> str:
     return f"""The user sent this instruction from their own Beeper account:
-{job.instruction}
+"{job.instruction}"
 
 Beeper source references (JSON data):
 ```json

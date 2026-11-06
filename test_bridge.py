@@ -69,7 +69,7 @@ class TriggerTests(unittest.TestCase):
         job = bridge.trigger(message(text="@bb inspect `literal` $(literal)\nand explain"), "server", [], 0)
         assert job is not None
         text = bridge.prompt(job)
-        self.assertIn("inspect `literal` $(literal)\nand explain", text)
+        self.assertIn('"inspect `literal` $(literal)\nand explain"', text)
         self.assertIn('"repliedToMessageID": "older-message"', text)
         self.assertIn('"timestamp": "2026-11-05T20:00:00Z"', text)
         self.assertIn("Beeper MCP", text)
@@ -78,6 +78,7 @@ class TriggerTests(unittest.TestCase):
         source_json = text.split("```json\n", 1)[1].split("\n```", 1)[0]
         self.assertEqual(type(job.source).model_validate_json(source_json), job.source)
         self.assertIn("sending a message in the source Beeper thread", text)
+        self.assertNotIn("If a response is warranted", text)
         self.assertIn('prefaced with "bb: ".', text)
         self.assertNotIn("Do not send messages to Beeper", text)
 
