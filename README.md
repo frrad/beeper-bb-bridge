@@ -43,7 +43,13 @@ uses its normal project defaults and workspace. `--beeper` and `--bb` accept
 absolute executable paths, useful under a supervisor.
 
 `--branch main` selects the shared project checkout on the existing `main`
-branch (through bb's `project-checkout` environment provider). Without `--branch`,
+branch (through bb's `project-checkout` environment provider). bb refuses branch
+checkout while another thread uses that workspace. For repeated triggers into a
+shared checkout, use `--environment env_EXISTING_ID` instead: new threads attach
+to that environment without a checkout operation. Resolve the ID with
+`bb environment list --project PROJECT_ID --json` and check its branch first.
+Omit `--machine` when passing an environment ID, since it already selects a
+machine. `--environment` and `--branch` are mutually exclusive. Without either,
 bb uses its normal workspace selection.
 
 `--dry-run` records matches without invoking bb. It automatically uses a separate

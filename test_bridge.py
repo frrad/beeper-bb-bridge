@@ -110,6 +110,32 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         expected_inputs: dict[str, dict[str, str]] = {"branch": {"kind": "existing", "name": "main"}}
         self.assertEqual(inputs, expected_inputs)
 
+    async def test_two_triggers_reuse_environment_without_checkout(self) -> None:
+        runner = bridge.Bridge(args("--environment", "env_main"), self.state)
+        runner.since = 0
+        with patch("bridge.command", new=AsyncMock(return_value=spawn_response())) as command:
+            for message_id in ("first", "second"):
+                sent = message(id=message_id)
+                event: dict[str, object] = {"type": "message.upserted", "chatID": sent["chatID"], "entries": [sent]}
+                await runner.event(event)
+        self.assertEqual(command.await_count, 2)
+        for call in command.await_args_list:
+            argv, _ = cast(tuple[list[str], str], call.args)
+            self.assertEqual(argv[argv.index("--environment") + 1], "env_main")
+            self.assertNotIn("--environment-provider", argv)
+            self.assertNotIn("--environment-inputs", argv)
+
+    async def test_structured_cli_error_is_reported(self) -> None:
+        import sys
+        program = '''import json,sys
+print(json.dumps({"ok": False, "error": {"code": "error", "message": "HTTP 409: Cannot checkout branch while another thread is using this workspace"}}))
+print("unstructured private stderr", file=sys.stderr)
+sys.exit(1)
+'''
+        with self.assertRaisesRegex(bridge.CommandError, "HTTP 409: Cannot checkout branch") as caught:
+            await bridge.command([sys.executable, "-c", program])
+        self.assertNotIn("private stderr", str(caught.exception))
+
     async def test_stored_job_is_validated_before_spawning(self) -> None:
         job = bridge.trigger(message(), "server", [], 0)
         assert job is not None

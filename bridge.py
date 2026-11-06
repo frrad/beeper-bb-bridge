@@ -19,7 +19,7 @@ import time
 from typing import TypedDict, cast
 
 from pydantic import TypeAdapter, ValidationError
-from models import BeeperResponse, Job, MessagePayload, Source, SpawnResponse, UpsertPayload
+from models import BeeperResponse, CLIErrorResponse, Job, MessagePayload, Source, SpawnResponse, UpsertPayload
 
 LOG = logging.getLogger("beeper-bb")
 PREFIX = "@bb "
@@ -94,6 +94,7 @@ class Options(argparse.Namespace):
     section: str | None
     reasoning_level: str | None
     branch: str | None
+    environment: str | None
     dry_run: bool
     key: str
     thread: str | None
@@ -172,6 +173,10 @@ async def stop_process(child: asyncio.subprocess.Process) -> None:
         await child.wait()
 
 
+class CommandError(RuntimeError):
+    """A failed CLI invocation, with bounded structured error details."""
+
+
 async def command(argv: list[str], stdin: str | None = None, timeout: float = 60) -> object:
     child = await asyncio.create_subprocess_exec(*argv,
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
@@ -202,7 +207,13 @@ async def command(argv: list[str], stdin: str | None = None, timeout: float = 60
     try:
         await asyncio.wait_for(communicate(), timeout)
         if child.returncode:
-            raise RuntimeError(f"{Path(argv[0]).name} command failed (exit {child.returncode}); check its local authentication")
+            detail = "check its local authentication"
+            try:
+                failure = CLIErrorResponse.model_validate_json(output)
+                detail = f"{failure.error.code}: {failure.error.message}".replace("\n", " ")[:500]
+            except ValidationError:
+                pass
+            raise CommandError(f"{Path(argv[0]).name} command failed (exit {child.returncode}): {detail}")
         return cast(object, json.loads(output))
     finally:
         await stop_process(child)
@@ -226,7 +237,7 @@ class Bridge:
         argv = [args.bb, "thread", "spawn", "--project", args.project, "--prompt-file", "-", "--json"]
         for name, value in (("machine", args.machine), ("provider", args.provider),
                             ("model", args.model), ("section", args.section),
-                            ("reasoning-level", args.reasoning_level)):
+                            ("reasoning-level", args.reasoning_level), ("environment", args.environment)):
             if value:
                 argv.extend(["--" + name, value])
         if args.branch:
@@ -256,9 +267,10 @@ class Bridge:
             except asyncio.CancelledError:
                 self.state.mark(key, "uncertain")
                 raise
-            except Exception:
+            except Exception as error:
                 self.state.mark(key, "uncertain")
-                LOG.error("Spawn outcome uncertain for %s; inspect bb threads before resolving this receipt", key)
+                detail = str(error) if isinstance(error, CommandError) else type(error).__name__
+                LOG.error("Spawn outcome uncertain for %s (%s); inspect bb threads before resolving this receipt", key, detail)
 
     async def event(self, value: object) -> None:
         try:
@@ -370,7 +382,9 @@ def parser() -> argparse.ArgumentParser:
     for name in ("machine", "provider", "model", "section"):
         run.add_argument("--" + name, help="Pass an explicit override to bb thread spawn")
     run.add_argument("--reasoning-level", help="Reasoning level supported by the chosen model")
-    run.add_argument("--branch", help="Use the shared project checkout on this existing branch")
+    workspace = run.add_mutually_exclusive_group()
+    workspace.add_argument("--branch", help="Select an existing branch in the shared project checkout")
+    workspace.add_argument("--environment", help="Reuse an environment ID or workspace path without checking out a branch")
     run.add_argument("--dry-run", action="store_true", help="Record matches without spawning; use a separate --state")
     sub.add_parser("jobs", help="List the latest 100 receipts (stop the runner first)")
     resolve = sub.add_parser("resolve", help="Resolve an uncertain spawn after inspecting bb (stop runner first)")
