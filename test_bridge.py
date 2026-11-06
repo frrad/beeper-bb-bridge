@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -94,6 +95,20 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self.state.close()
         self.temp.cleanup()
+
+    def test_spawn_routing_overrides(self) -> None:
+        runner = bridge.Bridge(args(
+            "--machine", "host_test", "--provider", "codex", "--model", "gpt-6.1-sol",
+            "--section", "sec_home", "--reasoning-level", "medium", "--branch", "main",
+        ), self.state)
+        argv = runner.spawn_argv()
+        for flag, expected in (("--project", "proj_test"), ("--section", "sec_home"),
+                               ("--model", "gpt-6.1-sol"), ("--reasoning-level", "medium"),
+                               ("--machine", "host_test"), ("--environment-provider", "project-checkout")):
+            self.assertEqual(argv[argv.index(flag) + 1], expected)
+        inputs = cast(object, json.loads(argv[argv.index("--environment-inputs") + 1]))
+        expected_inputs: dict[str, dict[str, str]] = {"branch": {"kind": "existing", "name": "main"}}
+        self.assertEqual(inputs, expected_inputs)
 
     async def test_stored_job_is_validated_before_spawning(self) -> None:
         job = bridge.trigger(message(), "server", [], 0)

@@ -38,9 +38,13 @@ uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server \
 ```
 
 `--chat` is repeatable; without it, all chats are eligible. `--machine`,
-`--provider`, `--model`, and `--section` are optional bb overrides. Otherwise bb
+`--provider`, `--model`, `--reasoning-level`, and `--section` are optional bb overrides. Otherwise bb
 uses its normal project defaults and workspace. `--beeper` and `--bb` accept
 absolute executable paths, useful under a supervisor.
+
+`--branch main` selects the shared project checkout on the existing `main`
+branch (through bb's `project-checkout` environment provider). Without `--branch`,
+bb uses its normal workspace selection.
 
 `--dry-run` records matches without invoking bb. It automatically uses a separate
 `.dry-run.sqlite3` database, so it cannot consume real receipts.
