@@ -56,3 +56,17 @@ class SpawnResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
 
     id: str = Field(min_length=1)
+
+
+class CLIError(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    code: str
+    message: str
+
+
+class CLIErrorResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
+
+    ok: Literal[False]
+    error: CLIError
