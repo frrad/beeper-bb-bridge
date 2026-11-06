@@ -104,6 +104,7 @@ without login requires the machine's user-lingering configuration.
 
 ```sh
 uv sync --locked
+uv run --locked mypy
 uv run --locked python -m unittest -v
 uv run --locked python -m py_compile bridge.py
 ```
@@ -113,8 +114,15 @@ uncertain outcomes, dry runs, real subprocess stdin, and shutdown.
 Fake executables replace Beeper/bb: tests never read/send real chats or start models.
 
 GitHub Actions runs these checks plus a CLI smoke test through uv on Linux/macOS
-with Python 3.11 and 3.13. The project has no third-party Python dependencies;
-plain `python3 bridge.py` still works with Python 3.11+.
+with Python 3.11 and 3.13. Pydantic validates jobs, source references, incoming
+Beeper payloads, and bb spawn responses. Jobs are also validated when read back
+from SQLite. uv installs Pydantic at runtime and mypy for development.
+
+Mypy checks every Python source and test file with `strict`, `extra_checks`,
+unreachable-code warnings, and all `disallow_any_*` checks (including expressions).
+Additional checks reject bare ignores, redundant expressions, unsafe truth tests,
+and unused awaitables. The Pydantic plugin enforces typed model constructors.
+There are no per-file relaxations or type-ignore suppressions.
 
 References: [headless setup](https://github.com/beeper/cli/blob/main/packages/cli/docs/setup.md),
 [watch](https://github.com/beeper/cli/blob/main/packages/cli/docs/watch.md),
