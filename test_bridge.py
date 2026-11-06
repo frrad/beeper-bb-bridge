@@ -75,6 +75,11 @@ class TriggerTests(unittest.TestCase):
         self.assertIn("Beeper MCP", text)
         self.assertIn("Read the source conversation for context using Beeper MCP.\nStart", text)
         self.assertNotIn("local Beeper CLI", text)
+        source_json = text.split("```json\n", 1)[1].split("\n```", 1)[0]
+        self.assertEqual(type(job.source).model_validate_json(source_json), job.source)
+        self.assertIn("sending a message in the source Beeper thread", text)
+        self.assertIn('prefaced with "bb: ".', text)
+        self.assertNotIn("Do not send messages to Beeper", text)
 
     def test_suffix_preserved_verbatim(self) -> None:
         suffix = " investigate this\nincluding details  "
