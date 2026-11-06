@@ -4,3 +4,4 @@ __pycache__/
 *.lock
 !uv.lock
 .venv/
+.mypy_cache/

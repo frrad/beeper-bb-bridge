@@ -5,7 +5,33 @@ description = "Launch bb threads from your own Beeper mentions"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = []
+dependencies = [
+    "pydantic>=2.14.3",
+]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["*.py"]
+strict = true
+extra_checks = true
+warn_unreachable = true
+disallow_any_explicit = true
+disallow_any_expr = true
+disallow_any_unimported = true
+disallow_any_decorated = true
+ignore_missing_imports = false
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool", "truthy-iterable", "unused-awaitable"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_typed = true
+init_forbid_extra = true
+warn_required_dynamic_aliases = true

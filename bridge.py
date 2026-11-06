@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Your own @bb Beeper messages → bb threads. Python 3.11+, standard library only."""
+"""Your own @bb Beeper messages → bb threads. Python 3.11+, managed with uv."""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +16,10 @@ import signal
 import sqlite3
 import sys
 import time
-from typing import Any
+from typing import TypedDict, cast
+
+from pydantic import TypeAdapter, ValidationError
+from models import BeeperResponse, Job, MessagePayload, Source, SpawnResponse, UpsertPayload
 
 LOG = logging.getLogger("beeper-bb")
 PREFIX = "@bb "
@@ -27,7 +30,7 @@ def iso(seconds: float) -> str:
     return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
 
 
-def timestamp(value: Any) -> float | None:
+def timestamp(value: object) -> float | None:
     if not isinstance(value, str):
         return None
     try:
@@ -37,36 +40,38 @@ def timestamp(value: Any) -> float | None:
         return None
 
 
-def trigger(message: Any, target: str, chats: list[str], since: float) -> dict | None:
-    if not isinstance(message, dict) or message.get("isSender") is not True:
+def trigger(value: object, target: str, chats: list[str], since: float) -> Job | None:
+    try:
+        message = MessagePayload.model_validate(value)
+    except ValidationError:
         return None
-    if message.get("isDeleted") or message.get("isHidden"):
+    if message.isSender is not True or message.isDeleted or message.isHidden:
         return None
-    if not all(isinstance(message.get(k), str) and message[k] for k in ("id", "chatID")):
+    if not message.id or not message.chatID:
         return None
-    when = timestamp(message.get("timestamp"))
-    if when is None or when < since or (chats and message["chatID"] not in chats):
+    when = timestamp(message.timestamp)
+    if when is None or when < since or (chats and message.chatID not in chats):
         return None
-    text = message.get("text")
-    if not isinstance(text, str) or len(text) > 32_000:
-        return None
-    if not text.startswith(PREFIX):
+    text = message.text
+    if text is None or not text.startswith(PREFIX):
         return None
     instruction = text[len(PREFIX):]
     if not instruction.strip():
         return None
-    source = {"target": target, "chatID": message["chatID"], "messageID": message["id"],
-              "timestamp": message["timestamp"], "repliedToMessageID": message.get("linkedMessageID")}
-    key = hashlib.sha256(json.dumps([target, message["chatID"], message["id"]]).encode()).hexdigest()
-    return {"key": key, "instruction": instruction, "source": source}
+    assert message.timestamp is not None
+    source = Source(target=target, chatID=message.chatID, messageID=message.id,
+                    timestamp=message.timestamp, repliedToMessageID=message.linkedMessageID)
+    identity: list[str] = [target, message.chatID, message.id]
+    key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+    return Job(key=key, instruction=instruction, source=source)
 
 
-def prompt(job: dict) -> str:
+def prompt(job: Job) -> str:
     return f"""The user sent this instruction from their own Beeper account:
-{job['instruction']}
+{job.instruction}
 
 Beeper source references (JSON data):
-{json.dumps(job['source'], indent=2)}
+{job.source.model_dump_json(indent=2)}
 
 Read the source conversation for context using Beeper MCP.
 Start with the chat ID and a time window around the timestamp. Message IDs are references, not opaque MCP pagination cursors.
@@ -75,8 +80,33 @@ If the source cannot be retrieved, explain that limitation instead of guessing.
 """
 
 
+class Options(argparse.Namespace):
+    action: str
+    state: Path
+    project: str
+    target: str
+    chat: list[str]
+    bb: str
+    beeper: str
+    machine: str | None
+    provider: str | None
+    model: str | None
+    section: str | None
+    dry_run: bool
+    key: str
+    thread: str | None
+    retry: bool
+
+
+class Receipt(TypedDict):
+    key: str
+    state: str
+    threadID: str | None
+    created: str
+
+
 class State:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.lock = path.with_suffix(path.suffix + ".lock").open("a")
         try:
@@ -95,25 +125,39 @@ class State:
         self.db.execute("UPDATE jobs SET state='uncertain' WHERE state='spawning'")
         self.db.commit()
 
-    def close(self):
+    def close(self) -> None:
         self.db.close()
         self.lock.close()
 
-    def enqueue(self, job: dict, argv: list[str]):
+    def enqueue(self, job: Job, argv: list[str]) -> None:
         self.db.execute("INSERT OR IGNORE INTO jobs VALUES (?,?,?,'pending',NULL,?)",
-                        (job["key"], json.dumps(job), json.dumps(argv), iso(datetime.now(timezone.utc).timestamp())))
+                        (job.key, job.model_dump_json(), json.dumps(argv), iso(datetime.now(timezone.utc).timestamp())))
         self.db.commit()
 
-    def mark(self, key: str, state: str, thread_id: str | None = None):
+    def mark(self, key: str, state: str, thread_id: str | None = None) -> None:
         self.db.execute("UPDATE jobs SET state=?,thread_id=? WHERE key=?", (state, thread_id, key))
         self.db.commit()
 
-    def jobs(self) -> list[dict]:
-        rows = self.db.execute("SELECT key,state,thread_id,created FROM jobs ORDER BY created DESC LIMIT 100")
-        return [dict(zip(("key", "state", "threadID", "created"), row)) for row in rows]
+    def jobs(self) -> list[Receipt]:
+        # SQLite's stubs return Any; these column types are owned by our schema.
+        rows = cast(list[tuple[str, str, str | None, str]], self.db.execute(
+            "SELECT key,state,thread_id,created FROM jobs ORDER BY created DESC LIMIT 100"
+        ).fetchall())
+        return [Receipt(key=key, state=state, threadID=thread_id, created=created)
+                for key, state, thread_id, created in rows]
+
+    def pending(self) -> list[tuple[str, Job, list[str]]]:
+        rows = cast(list[tuple[str, str, str]], self.db.execute(
+            "SELECT key,payload,argv FROM jobs WHERE state='pending' ORDER BY created"
+        ).fetchall())
+        try:
+            return [(key, Job.model_validate_json(payload), TypeAdapter(list[str]).validate_json(argv))
+                    for key, payload, argv in rows]
+        except ValidationError:
+            raise RuntimeError("Stored job or spawn arguments failed validation") from None
 
 
-async def stop_process(child: asyncio.subprocess.Process):
+async def stop_process(child: asyncio.subprocess.Process) -> None:
     if child.returncode is not None:
         return
     with contextlib.suppress(ProcessLookupError):
@@ -126,21 +170,25 @@ async def stop_process(child: asyncio.subprocess.Process):
         await child.wait()
 
 
-async def command(argv: list[str], stdin: str | None = None, timeout: float = 60) -> Any:
+async def command(argv: list[str], stdin: str | None = None, timeout: float = 60) -> object:
     child = await asyncio.create_subprocess_exec(*argv,
         stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     output = bytearray()
+    stdout = child.stdout
+    assert stdout is not None
 
-    async def communicate():
-        async def write():
+    async def communicate() -> None:
+        async def write() -> None:
             if stdin is not None:
-                child.stdin.write(stdin.encode())
-                await child.stdin.drain()
-                child.stdin.close()
+                writer_stream = child.stdin
+                assert writer_stream is not None
+                writer_stream.write(stdin.encode())
+                await writer_stream.drain()
+                writer_stream.close()
         writer = asyncio.create_task(write())
         try:
-            while chunk := await child.stdout.read(65536):
+            while chunk := await stdout.read(65536):
                 output.extend(chunk)
                 if len(output) > MAX_OUTPUT:
                     raise RuntimeError("CLI output exceeded 8 MiB")
@@ -153,19 +201,20 @@ async def command(argv: list[str], stdin: str | None = None, timeout: float = 60
         await asyncio.wait_for(communicate(), timeout)
         if child.returncode:
             raise RuntimeError(f"{Path(argv[0]).name} command failed (exit {child.returncode}); check its local authentication")
-        return json.loads(output)
+        return cast(object, json.loads(output))
     finally:
         await stop_process(child)
 
 
-def beeper_data(value: Any) -> Any:
-    if not isinstance(value, dict) or value.get("success") is not True:
-        raise RuntimeError("Beeper command failed or returned an unsupported JSON envelope")
-    return value.get("data")
+def beeper_data(value: object) -> object:
+    try:
+        return BeeperResponse.model_validate(value).data
+    except ValidationError:
+        raise RuntimeError("Beeper command failed or returned an unsupported JSON envelope") from None
 
 
 class Bridge:
-    def __init__(self, args: argparse.Namespace, state: State):
+    def __init__(self, args: Options, state: State) -> None:
         self.args, self.state = args, state
         self.since = time.time()
         self.connected = False
@@ -173,33 +222,31 @@ class Bridge:
     def spawn_argv(self) -> list[str]:
         args = self.args
         argv = [args.bb, "thread", "spawn", "--project", args.project, "--prompt-file", "-", "--json"]
-        for name in ("machine", "provider", "model", "section"):
-            if value := getattr(args, name):
+        for name, value in (("machine", args.machine), ("provider", args.provider),
+                            ("model", args.model), ("section", args.section)):
+            if value:
                 argv.extend(["--" + name, value])
         return argv
 
-    async def beeper(self, *argv: str):
+    async def beeper(self, *argv: str) -> object:
         return beeper_data(await command([self.args.beeper, *argv, "--target", self.args.target, "--json", "--read-only"]))
 
-    def accept(self, message: Any):
+    def accept(self, message: object) -> None:
         job = trigger(message, self.args.target, self.args.chat, self.since)
         if job:
             self.state.enqueue(job, self.spawn_argv())
 
-    async def drain(self):
-        for key, payload, argv in self.state.db.execute("SELECT key,payload,argv FROM jobs WHERE state='pending' ORDER BY created").fetchall():
-            job = json.loads(payload)
+    async def drain(self) -> None:
+        for key, job, argv in self.state.pending():
             if self.args.dry_run:
                 LOG.info("Dry run: would spawn for trigger %s", key)
                 self.state.mark(key, "dry-run")
                 continue
             self.state.mark(key, "spawning")
             try:
-                result = await command(json.loads(argv), prompt(job), timeout=120)
-                if not isinstance(result, dict) or not isinstance(result.get("id"), str):
-                    raise RuntimeError("bb returned no thread ID")
-                self.state.mark(key, "spawned", result["id"])
-                LOG.info("Created bb thread %s for trigger %s", result["id"], key)
+                result = SpawnResponse.model_validate(await command(argv, prompt(job), timeout=120))
+                self.state.mark(key, "spawned", result.id)
+                LOG.info("Created bb thread %s for trigger %s", result.id, key)
             except asyncio.CancelledError:
                 self.state.mark(key, "uncertain")
                 raise
@@ -207,52 +254,61 @@ class Bridge:
                 self.state.mark(key, "uncertain")
                 LOG.error("Spawn outcome uncertain for %s; inspect bb threads before resolving this receipt", key)
 
-    async def event(self, event: Any):
-        if not isinstance(event, dict) or event.get("type") != "message.upserted" or not isinstance(event.get("chatID"), str):
+    async def event(self, value: object) -> None:
+        try:
+            event = UpsertPayload.model_validate(value)
+        except ValidationError:
             return
-        entries = event.get("entries", [])
-        if not isinstance(entries, list):
-            return
-        entries = [e for e in entries if isinstance(e, dict)]
-        known = {e.get("id") for e in entries if isinstance(e.get("id"), str)}
-        ids = event.get("ids", [])
-        if isinstance(ids, list):
-            entries += [{"id": i} for i in ids if isinstance(i, str) and i not in known]
-        for entry in entries:
-            if entry.get("isSender") is False:
+        entries: list[MessagePayload] = []
+        for entry in event.entries:
+            try:
+                entries.append(MessagePayload.model_validate(entry))
+            except ValidationError:
                 continue
-            if isinstance(entry.get("text"), str) and not entry["text"].startswith(PREFIX):
+        known = {entry.id for entry in entries}
+        entries.extend(MessagePayload(id=message_id) for message_id in event.ids if message_id not in known)
+        for message in entries:
+            if message.isSender is False:
                 continue
-            message = {**entry, "chatID": event["chatID"]}
-            if timestamp(message.get("timestamp")) is None or "isSender" not in message or "text" not in message:
-                if not isinstance(entry.get("id"), str):
+            if message.text is not None and not message.text.startswith(PREFIX):
+                continue
+            updates: dict[str, object] = {"chatID": event.chatID}
+            message = message.model_copy(update=updates)
+            if timestamp(message.timestamp) is None or message.isSender is None or message.text is None:
+                if not message.id:
                     continue
-                message = await self.beeper("messages", "show", "--chat", event["chatID"], "--id", entry["id"])
+                try:
+                    message = MessagePayload.model_validate(await self.beeper(
+                        "messages", "show", "--chat", event.chatID, "--id", message.id))
+                except ValidationError:
+                    continue
             self.accept(message)
         await self.drain()
 
-    async def watch_once(self):
+    async def watch_once(self) -> None:
         argv = [self.args.beeper, "watch", "--target", self.args.target, "--json", "--events", "--read-only", "--include-type", "message.upserted"]
         for chat in self.args.chat:
             argv += ["--chat", chat]
         child = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=1024 * 1024)
         opened = asyncio.Event()
+        stdout_stream, stderr_stream = child.stdout, child.stderr
+        assert stdout_stream is not None and stderr_stream is not None
 
-        async def stdout():
-            async for line in child.stdout:
+        async def stdout() -> None:
+            async for line in stdout_stream:
                 try:
-                    value = json.loads(line)
+                    value = cast(object, json.loads(line))
                 except (ValueError, UnicodeDecodeError):
                     continue
                 await self.event(value)
             raise RuntimeError("Beeper watcher disconnected")
 
-        async def stderr():
-            async for line in child.stderr:
+        async def stderr() -> None:
+            async for line in stderr_stream:
                 try:
-                    value = json.loads(line)
-                    if isinstance(value, dict) and value.get("event") == "watch.open":
+                    value = cast(object, json.loads(line))
+                    if isinstance(value, dict) and cast(dict[str, object], value).get("event") == "watch.open":
                         opened.set()
                         self.connected = True
                         LOG.info("Beeper watcher connected")
@@ -260,7 +316,7 @@ class Bridge:
                     pass  # Never forward arbitrary CLI stderr or credentials.
             raise RuntimeError("Beeper watcher stopped")
 
-        async def connection():
+        async def connection() -> None:
             await asyncio.wait_for(opened.wait(), 30)
             await child.wait()
             raise RuntimeError("Beeper watcher stopped")
@@ -276,7 +332,7 @@ class Bridge:
             await asyncio.gather(*tasks, return_exceptions=True)
             await stop_process(child)
 
-    async def run(self):
+    async def run(self) -> None:
         await self.drain()
         backoff = 1
         while True:
@@ -301,7 +357,8 @@ def parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Watch your own @bb messages and launch bb threads")
     run.add_argument("--project", required=True, help="Explicit bb destination project ID")
     run.add_argument("--target", default="server", help="Named Beeper CLI target")
-    run.add_argument("--chat", action="append", default=[], help="Allowed chat ID; repeatable (default: all)")
+    chat_defaults: list[str] = []
+    run.add_argument("--chat", action="append", default=chat_defaults, help="Allowed chat ID; repeatable (default: all)")
     run.add_argument("--beeper", default="beeper", help="Beeper executable path")
     run.add_argument("--bb", default="bb", help="bb executable path")
     for name in ("machine", "provider", "model", "section"):
@@ -316,11 +373,14 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
-async def run_until_stopped(bridge: Bridge):
+async def run_until_stopped(bridge: Bridge) -> None:
     task = asyncio.create_task(bridge.run())
     loop = asyncio.get_running_loop()
+    def cancel_task() -> None:
+        task.cancel()
+
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, task.cancel)
+        loop.add_signal_handler(sig, cancel_task)
     try:
         await task
     except asyncio.CancelledError:
@@ -333,7 +393,7 @@ async def run_until_stopped(bridge: Bridge):
 def main() -> int:
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    args = parser().parse_args()
+    args = parser().parse_args(namespace=Options())
     # Dry runs cannot consume real trigger receipts.
     if args.action == "run" and args.dry_run:
         args.state = args.state.with_suffix(".dry-run.sqlite3")
@@ -343,7 +403,7 @@ def main() -> int:
             if args.action == "jobs":
                 print(json.dumps(state.jobs(), indent=2))
             elif args.action == "resolve":
-                if state.db.execute("SELECT state FROM jobs WHERE key=?", (args.key,)).fetchone() != ("uncertain",):
+                if cast(object, state.db.execute("SELECT state FROM jobs WHERE key=?", (args.key,)).fetchone()) != ("uncertain",):
                     raise RuntimeError("Expected an uncertain receipt key from jobs")
                 state.mark(args.key, "pending" if args.retry else "spawned", args.thread)
             else:
