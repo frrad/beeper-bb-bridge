@@ -20,10 +20,13 @@ class TriggerTests(unittest.TestCase):
     def test_own_prefix_only(self):
         for changes in ({"isSender": False}, {"isSender": None}, {"isDeleted": True}, {"isHidden": True},
                         {"text": "someone said @bb investigate"}, {"text": "@bbq"}, {"id": ""},
+                        {"text": "@BB investigate"}, {"text": " @bb investigate"},
+                        {"text": "@bb\ninvestigate"}, {"text": "@bb"}, {"text": "@bb "},
                         {"timestamp": "bad"}, {"timestamp": "2026-11-05T20:00:00"}):
             with self.subTest(changes=changes):
                 self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
-        self.assertIsNotNone(bridge.trigger(message(text="  @BB\n investigate\nthis"), "server", [], 0))
+        job = bridge.trigger(message(text="@bb investigate\nthis"), "server", [], 0)
+        self.assertEqual(job["instruction"], "investigate\nthis")
 
     def test_age_chat_and_dedup_identity(self):
         self.assertIsNone(bridge.trigger(message(), "server", ["another-chat"], 0))
@@ -40,7 +43,14 @@ class TriggerTests(unittest.TestCase):
         self.assertIn('"repliedToMessageID": "older-message"', text)
         self.assertIn('"timestamp": "2026-11-05T20:00:00Z"', text)
         self.assertIn("Beeper MCP", text)
-        self.assertIn("replied to", bridge.trigger(message(text="@bb"), "server", [], 0)["instruction"])
+        self.assertIn("Read the source conversation for context using Beeper MCP.\nStart", text)
+        self.assertNotIn("local Beeper CLI", text)
+
+    def test_suffix_preserved_verbatim(self):
+        suffix = " investigate this\nincluding details  "
+        job = bridge.trigger(message(text="@bb " + suffix), "server", [], 0)
+        self.assertEqual(job["instruction"], suffix)
+        self.assertIn(suffix, bridge.prompt(job))
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):

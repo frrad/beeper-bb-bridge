@@ -25,9 +25,10 @@ uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server
 ```
 
 Send `@bb investigate this` in any chat, optionally as a reply. Only your own
-messages (`isSender: true`) trigger work. The prefix is case-insensitive and
-must start the message, followed by whitespace or end-of-message. Bare `@bb`
-asks the agent to investigate the replied-to message or surrounding conversation.
+messages (`isSender: true`) trigger work. The exact prefix is `@bb ` (including
+the space), at the very start of the message. Everything after that prefix is
+included verbatim as your instruction in the starting prompt. Empty instructions,
+bare `@bb`, leading whitespace, and `@BB` do not trigger work.
 
 ```sh
 # Restrict to a chat and choose the destination machine/provider/model:
