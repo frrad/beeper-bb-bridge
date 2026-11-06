@@ -6,8 +6,8 @@ message to point the agent at it.
 
 The prompt contains your instruction, chat/message IDs, timestamp, and replied-to
 message ID. The model uses your existing **Beeper MCP** to fetch context as needed.
-When a response is warranted, the model is instructed to answer in the source
-Beeper thread, prefixed with `bb: `. The script itself starts threads and supplies references;
+The model is instructed to send its answer back to the source Beeper thread,
+prefixed with `bb: `. The script itself starts threads and supplies references;
 it does not assemble transcripts. No bb plugin, inbound HTTP server, or extra
 bot account.
 

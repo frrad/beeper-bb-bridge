@@ -77,8 +77,8 @@ class TriggerTests(unittest.TestCase):
         self.assertNotIn("local Beeper CLI", text)
         source_json = text.split("```json\n", 1)[1].split("\n```", 1)[0]
         self.assertEqual(type(job.source).model_validate_json(source_json), job.source)
-        self.assertIn("If a response is warranted, respond to the user's query", text)
-        self.assertIn("in the source Beeper thread,", text)
+        self.assertIn("sending a message in the source Beeper thread", text)
+        self.assertNotIn("If a response is warranted", text)
         self.assertIn('prefaced with "bb: ".', text)
         self.assertNotIn("Do not send messages to Beeper", text)
 
