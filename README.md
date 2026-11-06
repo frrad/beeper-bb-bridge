@@ -11,7 +11,8 @@ inbound HTTP server, or extra bot account.
 
 ## Run
 
-Requires Linux/macOS, **Python 3.11+** (standard library only), the official
+Requires Linux/macOS, [uv](https://docs.astral.sh/uv/getting-started/installation/)
+(manages **Python 3.11+**), the official
 [Beeper CLI](https://github.com/beeper/cli) with a signed-in headless server target,
 and an authenticated `bb` CLI. The spawned model needs Beeper MCP pointing at
 the same instance, or access to the local Beeper CLI fallback.
@@ -20,7 +21,7 @@ the same instance, or access to the local Beeper CLI fallback.
 git clone https://github.com/frrad/beeper-bb-bridge.git
 cd beeper-bb-bridge
 bb project list --json
-python3 bridge.py run --project proj_YOUR_PROJECT --target server
+uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server
 ```
 
 Send `@bb investigate this` in any chat, optionally as a reply. Only your own
@@ -30,7 +31,7 @@ asks the agent to investigate the replied-to message or surrounding conversation
 
 ```sh
 # Restrict to a chat and choose the destination machine/provider/model:
-python3 bridge.py run --project proj_YOUR_PROJECT --target server \
+uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server \
   --chat '!room:beeper.local' --machine host_YOUR_MACHINE \
   --provider codex --model YOUR_MODEL
 ```
@@ -71,12 +72,12 @@ bodies and raw CLI stderr. Retain the database across updates.
 Stop the runner before inspecting/resolving receipts:
 
 ```sh
-python3 bridge.py jobs
+uv run --locked bridge.py jobs
 bb thread list --project proj_YOUR_PROJECT --json
 # After checking whether bb created the thread:
-python3 bridge.py resolve RECEIPT_KEY --thread thr_EXISTING_THREAD
+uv run --locked bridge.py resolve RECEIPT_KEY --thread thr_EXISTING_THREAD
 # Or explicitly queue another attempt (can duplicate an unrecorded thread):
-python3 bridge.py resolve RECEIPT_KEY --retry
+uv run --locked bridge.py resolve RECEIPT_KEY --retry
 ```
 
 Restart `run` to submit pending jobs. Other people's messages are context, not
@@ -102,13 +103,18 @@ without login requires the machine's user-lingering configuration.
 ## Development
 
 ```sh
-python3 -m unittest -v
-python3 -m py_compile bridge.py
+uv sync --locked
+uv run --locked python -m unittest -v
+uv run --locked python -m py_compile bridge.py
 ```
 
 Tests exercise filtering, prompts, restart deduplication, partial events,
 catch-up, uncertain outcomes, dry runs, real subprocess stdin, and shutdown.
 Fake executables replace Beeper/bb: tests never read/send real chats or start models.
+
+GitHub Actions runs these checks plus a CLI smoke test through uv on Linux/macOS
+with Python 3.11 and 3.13. The project has no third-party Python dependencies;
+plain `python3 bridge.py` still works with Python 3.11+.
 
 References: [headless setup](https://github.com/beeper/cli/blob/main/packages/cli/docs/setup.md),
 [watch](https://github.com/beeper/cli/blob/main/packages/cli/docs/watch.md),

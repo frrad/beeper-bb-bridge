@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 # Edit paths/project ID. Include bb, beeper, and node directories in PATH.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 %h/Projects/beeper-bb-bridge/bridge.py run --project proj_REPLACE_ME --target server
+ExecStart=%h/.local/bin/uv run --locked --directory %h/Projects/beeper-bb-bridge bridge.py run --project proj_REPLACE_ME --target server
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10
