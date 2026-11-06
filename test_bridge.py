@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,10 +19,13 @@ class TriggerTests(unittest.TestCase):
     def test_own_prefix_only(self):
         for changes in ({"isSender": False}, {"isSender": None}, {"isDeleted": True}, {"isHidden": True},
                         {"text": "someone said @bb investigate"}, {"text": "@bbq"}, {"id": ""},
+                        {"text": "@BB investigate"}, {"text": " @bb investigate"},
+                        {"text": "@bb\ninvestigate"}, {"text": "@bb"}, {"text": "@bb "},
                         {"timestamp": "bad"}, {"timestamp": "2026-11-05T20:00:00"}):
             with self.subTest(changes=changes):
                 self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
-        self.assertIsNotNone(bridge.trigger(message(text="  @BB\n investigate\nthis"), "server", [], 0))
+        job = bridge.trigger(message(text="@bb investigate\nthis"), "server", [], 0)
+        self.assertEqual(job["instruction"], "investigate\nthis")
 
     def test_age_chat_and_dedup_identity(self):
         self.assertIsNone(bridge.trigger(message(), "server", ["another-chat"], 0))
@@ -40,7 +42,14 @@ class TriggerTests(unittest.TestCase):
         self.assertIn('"repliedToMessageID": "older-message"', text)
         self.assertIn('"timestamp": "2026-11-05T20:00:00Z"', text)
         self.assertIn("Beeper MCP", text)
-        self.assertIn("replied to", bridge.trigger(message(text="@bb"), "server", [], 0)["instruction"])
+        self.assertIn("Read the source conversation for context using Beeper MCP.\nStart", text)
+        self.assertNotIn("local Beeper CLI", text)
+
+    def test_suffix_preserved_verbatim(self):
+        suffix = " investigate this\nincluding details  "
+        job = bridge.trigger(message(text="@bb " + suffix), "server", [], 0)
+        self.assertEqual(job["instruction"], suffix)
+        self.assertIn(suffix, bridge.prompt(job))
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
@@ -114,23 +123,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         command.assert_not_awaited()
         self.assertEqual(self.state.jobs()[0]["state"], "dry-run")
 
-    async def test_catchup_overflow_keeps_checkpoint(self):
-        checkpoint = self.state.checkpoint(self.runner.scope)
-        own = message(timestamp=bridge.iso(datetime.now(timezone.utc).timestamp()))
-        with patch.object(self.runner, "beeper", new=AsyncMock(return_value=[own] * 1000)):
-            with self.assertRaisesRegex(RuntimeError, "1000"):
-                await self.runner.sweep()
-        self.assertEqual(self.state.checkpoint(self.runner.scope), checkpoint)
-        self.assertEqual(len(self.state.jobs()), 1)
-
-    async def test_periodic_catchup_recovers_missing_event(self):
-        own = message(timestamp=bridge.iso(datetime.now(timezone.utc).timestamp()))
-        with patch.object(self.runner, "beeper", new=AsyncMock(return_value=[own])):
-            with patch("bridge.command", new=AsyncMock(return_value={"id": "thr_catchup"})) as command:
-                await self.runner.sweep()
-                await self.runner.sweep()
-        command.assert_awaited_once()
-
     async def test_actual_watcher_subprocess_and_stdin_spawn(self):
         fixture = Path(self.temp.name) / "fake_cli.py"
         fixture.write_text('''#!/usr/bin/env python3
@@ -142,8 +134,6 @@ if sys.argv[1] == 'watch':
         'id': 'integration', 'isSender': True, 'text': '@bb inspect `literal` $(literal)',
         'timestamp': datetime.now(timezone.utc).isoformat(), 'linkedMessageID': 'old'}]}), flush=True)
     time.sleep(30)
-elif sys.argv[1:3] == ['messages', 'search']:
-    print(json.dumps({'success': True, 'data': []}))
 elif sys.argv[1:3] == ['thread', 'spawn']:
     text = sys.stdin.read()
     assert '$(literal)' in text and 'old' in text and '--prompt-file' in sys.argv
@@ -162,6 +152,10 @@ else:
                         task.result()
                     await asyncio.sleep(0.02)
             self.assertEqual(self.state.jobs()[0]["threadID"], "thr_integration")
+            # The fixture rejects every Beeper command except watch. Staying
+            # connected while idle confirms no background search is attempted.
+            await asyncio.sleep(0.05)
+            self.assertFalse(task.done())
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
