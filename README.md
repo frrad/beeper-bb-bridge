@@ -6,7 +6,7 @@ message to point the agent at it.
 
 The prompt contains your instruction, chat/message IDs, timestamp, and replied-to
 message ID. The model uses your existing **Beeper MCP** to fetch context as needed.
-The model is instructed to send its answer back to the source Beeper thread,
+By default, the model is instructed to send its answer back to the source Beeper thread,
 prefixed with `bb: `. The script itself starts threads and supplies references;
 it does not assemble transcripts. No bb plugin, inbound HTTP server, or extra
 bot account.
@@ -39,6 +39,12 @@ uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server \
   --provider codex --model YOUR_MODEL
 ```
 
+Choose the starting prompt with `--prompt self-contained` (the default) or
+`--prompt skill`. The self-contained prompt includes instructions for retrieving
+context and replying. The skill prompt starts with `/beeper-message`, followed
+only by your instruction and source references; configure that skill in the
+spawned agent's environment before using this mode.
+
 `--chat` is repeatable; without it, all chats are eligible. `--machine`,
 `--provider`, `--model`, `--reasoning-level`, and `--section` are optional bb overrides. Otherwise bb
 uses its normal project defaults and workspace. `--beeper` and `--bb` accept
@@ -70,7 +76,8 @@ or this repository.
   recorded locally are still processed after a restart.
 - SQLite deduplicates by target + chat ID + message ID across edits, repeated
   events, and restarts. The first accepted instruction wins.
-- Pending jobs retain their original bb arguments. A file lock prevents two
+- Pending jobs retain their original bb arguments and prompt selection. Older
+  receipts without a prompt selection use `self-contained`. A file lock prevents two
   processes using the same state database.
 - If bb fails/times out or the script stops during spawn submission, the receipt
   becomes **uncertain**. It is never retried automatically: bb may already have

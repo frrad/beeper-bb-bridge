@@ -7,7 +7,7 @@ from typing import cast
 from unittest.mock import AsyncMock, patch
 from pydantic import ValidationError
 import bridge
-from models import Job
+from models import Job, PromptMode
 
 
 def message(**overrides: object) -> dict[str, object]:
@@ -82,6 +82,32 @@ class TriggerTests(unittest.TestCase):
         self.assertIn('prefaced with "bb: ".', text)
         self.assertNotIn("Do not send messages to Beeper", text)
 
+    def test_skill_prompt(self) -> None:
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SKILL)
+        assert job is not None
+        self.assertEqual(bridge.prompt(job), (
+            '/beeper-message\n\n'
+            'The user sent this instruction from their own Beeper account:\n'
+            '"investigate this"\n\n'
+            'Beeper source references (JSON data):\n'
+            f'```json\n{job.source.model_dump_json(indent=2)}\n```\n'
+        ))
+
+    def test_prompt_cli_choices(self) -> None:
+        self.assertEqual(args().prompt, PromptMode.SELF_CONTAINED)
+        for mode in PromptMode:
+            self.assertEqual(args("--prompt", mode.value).prompt, mode)
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            args("--prompt", "unknown")
+
+    def test_legacy_job_defaults_to_self_contained(self) -> None:
+        job = bridge.trigger(message(), "server", [], 0)
+        assert job is not None
+        legacy = job.model_dump_json(exclude={"prompt_mode"})
+        restored = Job.model_validate_json(legacy)
+        self.assertEqual(restored.prompt_mode, PromptMode.SELF_CONTAINED)
+        self.assertEqual(bridge.prompt(restored), bridge.prompt(job))
+
     def test_suffix_preserved_verbatim(self) -> None:
         suffix = " investigate this\nincluding details  "
         job = bridge.trigger(message(text="@bb " + suffix), "server", [], 0)
@@ -130,6 +156,20 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(argv[argv.index("--environment") + 1], "env_main")
             self.assertNotIn("--environment-provider", argv)
             self.assertNotIn("--environment-inputs", argv)
+
+    async def test_skill_selection_survives_restart_with_different_default(self) -> None:
+        runner = bridge.Bridge(args("--prompt", "skill"), self.state)
+        runner.since = 0
+        runner.accept(message())
+        self.state.close()
+        self.state = bridge.State(self.path)
+        restarted = bridge.Bridge(args(), self.state)
+        stored = self.state.pending()[0][1]
+        self.assertEqual(stored.prompt_mode, PromptMode.SKILL)
+        with patch("bridge.command", new=AsyncMock(return_value=spawn_response())) as command:
+            await restarted.drain()
+        command.assert_awaited_once_with(restarted.spawn_argv(), bridge.prompt(stored), timeout=120)
+        self.assertTrue(bridge.prompt(stored).startswith("/beeper-message\n\n"))
 
     async def test_structured_cli_error_is_reported(self) -> None:
         import sys
