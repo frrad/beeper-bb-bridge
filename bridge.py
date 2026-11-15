@@ -84,15 +84,16 @@ def trigger(
 
 
 def prompt(job: Job) -> str:
-    match job.prompt_mode:
-        case PromptMode.SELF_CONTAINED:
-            return f"""The user sent this instruction from their own Beeper account:
+    context = f"""The user sent this instruction from their own Beeper account:
 "{job.instruction}"
 
 Beeper source references (JSON data):
 ```json
 {job.source.model_dump_json(indent=2)}
-```
+```"""
+    match job.prompt_mode:
+        case PromptMode.SELF_CONTAINED:
+            return f"""{context}
 
 Read the source conversation for context using Beeper MCP.
 Start with the chat ID and a time window around the timestamp.
@@ -105,13 +106,7 @@ If the source cannot be retrieved, explain that limitation instead of guessing.
         case PromptMode.SKILL:
             return f"""/beeper-message
 
-The user sent this instruction from their own Beeper account:
-"{job.instruction}"
-
-Beeper source references (JSON data):
-```json
-{job.source.model_dump_json(indent=2)}
-```
+{context}
 """
         case _:
             assert_never(job.prompt_mode)
