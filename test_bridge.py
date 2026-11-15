@@ -7,7 +7,7 @@ from typing import cast
 from unittest.mock import AsyncMock, patch
 from pydantic import ValidationError
 import bridge
-from models import Job
+from models import Job, PromptMode
 
 
 def message(**overrides: object) -> dict[str, object]:
@@ -28,7 +28,8 @@ def spawn_response() -> dict[str, str]:
 
 def args(*extra: str) -> bridge.Options:
     return bridge.parser().parse_args(
-        ["run", "--project", "proj_test", *extra], namespace=bridge.Options()
+        ["run", "--project", "proj_test", "--prompt", "self-contained", *extra],
+        namespace=bridge.Options(),
     )
 
 
@@ -36,14 +37,20 @@ class TriggerTests(unittest.TestCase):
     def test_payload_types_are_strict(self) -> None:
         for changes in ({"isSender": "true"}, {"linkedMessageID": 7}, {"text": 123}):
             with self.subTest(changes=changes):
-                self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
+                self.assertIsNone(
+                    bridge.trigger(
+                        message(**changes), "server", [], 0, PromptMode.SELF_CONTAINED
+                    )
+                )
         # Beeper may add fields unrelated to trigger handling.
         self.assertIsNotNone(
-            bridge.trigger(message(newField="ignored"), "server", [], 0)
+            bridge.trigger(
+                message(newField="ignored"), "server", [], 0, PromptMode.SELF_CONTAINED
+            )
         )
 
     def test_job_model_validates_serialized_payload(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.assertEqual(Job.model_validate_json(job.model_dump_json()), job)
         with self.assertRaises(ValidationError):
@@ -71,22 +78,46 @@ class TriggerTests(unittest.TestCase):
             {"timestamp": "2026-11-05T20:00:00"},
         ):
             with self.subTest(changes=changes):
-                self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
-        job = bridge.trigger(message(text="@bb investigate\nthis"), "server", [], 0)
+                self.assertIsNone(
+                    bridge.trigger(
+                        message(**changes), "server", [], 0, PromptMode.SELF_CONTAINED
+                    )
+                )
+        job = bridge.trigger(
+            message(text="@bb investigate\nthis"),
+            "server",
+            [],
+            0,
+            PromptMode.SELF_CONTAINED,
+        )
         assert job is not None
         self.assertEqual(job.instruction, "investigate\nthis")
 
     def test_age_chat_and_dedup_identity(self) -> None:
-        self.assertIsNone(bridge.trigger(message(), "server", ["another-chat"], 0))
-        self.assertIsNone(bridge.trigger(message(), "server", [], 2_000_000_000))
-        first = bridge.trigger(message(), "server", [], 0)
+        self.assertIsNone(
+            bridge.trigger(
+                message(), "server", ["another-chat"], 0, PromptMode.SELF_CONTAINED
+            )
+        )
+        self.assertIsNone(
+            bridge.trigger(
+                message(), "server", [], 2_000_000_000, PromptMode.SELF_CONTAINED
+            )
+        )
+        first = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert first is not None
         edited = bridge.trigger(
-            message(text="@bb different instruction"), "server", [], 0
+            message(text="@bb different instruction"),
+            "server",
+            [],
+            0,
+            PromptMode.SELF_CONTAINED,
         )
         assert edited is not None
         self.assertEqual(first.key, edited.key)
-        other = bridge.trigger(message(chatID="other"), "server", [], 0)
+        other = bridge.trigger(
+            message(chatID="other"), "server", [], 0, PromptMode.SELF_CONTAINED
+        )
         assert other is not None
         assert other is not None
         self.assertNotEqual(first.key, other.key)
@@ -97,6 +128,7 @@ class TriggerTests(unittest.TestCase):
             "server",
             [],
             0,
+            PromptMode.SELF_CONTAINED,
         )
         assert job is not None
         text = bridge.prompt(job)
@@ -115,9 +147,43 @@ class TriggerTests(unittest.TestCase):
         self.assertIn('prefaced with "bb: ".', text)
         self.assertNotIn("Do not send messages to Beeper", text)
 
+    def test_skill_prompt(self) -> None:
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SKILL)
+        assert job is not None
+        self.assertEqual(
+            bridge.prompt(job),
+            (
+                "/beeper-message\n\n"
+                "The user sent this instruction from their own Beeper account:\n"
+                '"investigate this"\n\n'
+                "Beeper source references (JSON data):\n"
+                f"```json\n{job.source.model_dump_json(indent=2)}\n```\n"
+            ),
+        )
+
+    def test_prompt_cli_choices(self) -> None:
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            bridge.parser().parse_args(
+                ["run", "--project", "proj_test"], namespace=bridge.Options()
+            )
+        for mode in PromptMode:
+            self.assertEqual(args("--prompt", mode.value).prompt, mode)
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            args("--prompt", "unknown")
+
+    def test_legacy_job_defaults_to_self_contained(self) -> None:
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
+        assert job is not None
+        legacy = job.model_dump_json(exclude={"prompt_mode"})
+        restored = Job.model_validate_json(legacy)
+        self.assertEqual(restored.prompt_mode, PromptMode.SELF_CONTAINED)
+        self.assertEqual(bridge.prompt(restored), bridge.prompt(job))
+
     def test_suffix_preserved_verbatim(self) -> None:
         suffix = " investigate this\nincluding details  "
-        job = bridge.trigger(message(text="@bb " + suffix), "server", [], 0)
+        job = bridge.trigger(
+            message(text="@bb " + suffix), "server", [], 0, PromptMode.SELF_CONTAINED
+        )
         assert job is not None
         self.assertEqual(job.instruction, suffix)
         self.assertIn(suffix, bridge.prompt(job))
@@ -190,6 +256,24 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("--environment-provider", argv)
             self.assertNotIn("--environment-inputs", argv)
 
+    async def test_skill_selection_survives_restart_with_different_prompt(self) -> None:
+        runner = bridge.Bridge(args("--prompt", "skill"), self.state)
+        runner.since = 0
+        runner.accept(message())
+        self.state.close()
+        self.state = bridge.State(self.path)
+        restarted = bridge.Bridge(args(), self.state)
+        stored = self.state.pending()[0][1]
+        self.assertEqual(stored.prompt_mode, PromptMode.SKILL)
+        with patch(
+            "bridge.command", new=AsyncMock(return_value=spawn_response())
+        ) as command:
+            await restarted.drain()
+        command.assert_awaited_once_with(
+            restarted.spawn_argv(), bridge.prompt(stored), timeout=120
+        )
+        self.assertTrue(bridge.prompt(stored).startswith("/beeper-message\n\n"))
+
     async def test_structured_cli_error_is_reported(self) -> None:
         import sys
 
@@ -205,7 +289,7 @@ sys.exit(1)
         self.assertNotIn("private stderr", str(caught.exception))
 
     async def test_stored_job_is_validated_before_spawning(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         pending = self.state.pending()
@@ -218,7 +302,7 @@ sys.exit(1)
         command.assert_not_awaited()
 
     async def test_malformed_spawn_response_is_uncertain(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         invalid: dict[str, object] = {"id": 123}
@@ -288,7 +372,7 @@ sys.exit(1)
         self.assertFalse(self.state.jobs())
 
     async def test_ambiguous_spawn_never_retries_automatically(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         with patch(
@@ -300,7 +384,7 @@ sys.exit(1)
         self.assertEqual(self.state.jobs()[0]["state"], "uncertain")
 
     async def test_killed_spawn_becomes_uncertain_on_restart(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         self.state.mark(job.key, "spawning")

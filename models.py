@@ -1,5 +1,6 @@
 """Validated data at the Beeper, SQLite, and bb process boundaries."""
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,12 +16,18 @@ class Source(BaseModel):
     repliedToMessageID: str | None = None
 
 
+class PromptMode(StrEnum):
+    SELF_CONTAINED = "self-contained"
+    SKILL = "skill"
+
+
 class Job(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     key: str = Field(pattern=r"^[a-f0-9]{64}$")
     instruction: str = Field(min_length=1)
     source: Source
+    prompt_mode: PromptMode = PromptMode.SELF_CONTAINED
 
 
 class MessagePayload(BaseModel):
