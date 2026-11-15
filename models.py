@@ -1,4 +1,5 @@
 """Validated data at the Beeper, SQLite, and bb process boundaries."""
+
 from enum import StrEnum
 from typing import Literal
 

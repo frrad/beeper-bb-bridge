@@ -14,7 +14,8 @@ jobs:
           version: '0.13.6'
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
+      - run: uv run --locked black --check .
       - run: uv run --locked mypy
       - run: uv run --locked python -m unittest -v
-      - run: uv run --locked python -m py_compile bridge.py
+      - run: uv run --locked python -m py_compile bridge.py models.py test_bridge.py
       - run: uv run --locked bridge.py --help
