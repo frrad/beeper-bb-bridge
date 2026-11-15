@@ -1,4 +1,5 @@
 """Validated data at the Beeper, SQLite, and bb process boundaries."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
