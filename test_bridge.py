@@ -11,8 +11,15 @@ from models import Job
 
 
 def message(**overrides: object) -> dict[str, object]:
-    return {"id": "msg-1", "chatID": "!chat:beeper.local", "timestamp": "2026-11-05T20:00:00Z",
-            "isSender": True, "text": "@bb investigate this", "linkedMessageID": "older-message", **overrides}
+    return {
+        "id": "msg-1",
+        "chatID": "!chat:beeper.local",
+        "timestamp": "2026-11-05T20:00:00Z",
+        "isSender": True,
+        "text": "@bb investigate this",
+        "linkedMessageID": "older-message",
+        **overrides,
+    }
 
 
 def spawn_response() -> dict[str, str]:
@@ -20,7 +27,9 @@ def spawn_response() -> dict[str, str]:
 
 
 def args(*extra: str) -> bridge.Options:
-    return bridge.parser().parse_args(["run", "--project", "proj_test", *extra], namespace=bridge.Options())
+    return bridge.parser().parse_args(
+        ["run", "--project", "proj_test", *extra], namespace=bridge.Options()
+    )
 
 
 class TriggerTests(unittest.TestCase):
@@ -29,7 +38,9 @@ class TriggerTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
         # Beeper may add fields unrelated to trigger handling.
-        self.assertIsNotNone(bridge.trigger(message(newField="ignored"), "server", [], 0))
+        self.assertIsNotNone(
+            bridge.trigger(message(newField="ignored"), "server", [], 0)
+        )
 
     def test_job_model_validates_serialized_payload(self) -> None:
         job = bridge.trigger(message(), "server", [], 0)
@@ -38,14 +49,27 @@ class TriggerTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             Job.model_validate_json('{"key": 123, "instruction": "task", "source": {}}')
         with self.assertRaises(ValidationError):
-            Job.model_validate_json(job.model_dump_json()[:-1] + ', "unexpected": true}')
+            Job.model_validate_json(
+                job.model_dump_json()[:-1] + ', "unexpected": true}'
+            )
 
     def test_own_prefix_only(self) -> None:
-        for changes in ({"isSender": False}, {"isSender": None}, {"isDeleted": True}, {"isHidden": True},
-                        {"text": "someone said @bb investigate"}, {"text": "@bbq"}, {"id": ""},
-                        {"text": "@BB investigate"}, {"text": " @bb investigate"},
-                        {"text": "@bb\ninvestigate"}, {"text": "@bb"}, {"text": "@bb "},
-                        {"timestamp": "bad"}, {"timestamp": "2026-11-05T20:00:00"}):
+        for changes in (
+            {"isSender": False},
+            {"isSender": None},
+            {"isDeleted": True},
+            {"isHidden": True},
+            {"text": "someone said @bb investigate"},
+            {"text": "@bbq"},
+            {"id": ""},
+            {"text": "@BB investigate"},
+            {"text": " @bb investigate"},
+            {"text": "@bb\ninvestigate"},
+            {"text": "@bb"},
+            {"text": "@bb "},
+            {"timestamp": "bad"},
+            {"timestamp": "2026-11-05T20:00:00"},
+        ):
             with self.subTest(changes=changes):
                 self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
         job = bridge.trigger(message(text="@bb investigate\nthis"), "server", [], 0)
@@ -57,7 +81,9 @@ class TriggerTests(unittest.TestCase):
         self.assertIsNone(bridge.trigger(message(), "server", [], 2_000_000_000))
         first = bridge.trigger(message(), "server", [], 0)
         assert first is not None
-        edited = bridge.trigger(message(text="@bb different instruction"), "server", [], 0)
+        edited = bridge.trigger(
+            message(text="@bb different instruction"), "server", [], 0
+        )
         assert edited is not None
         self.assertEqual(first.key, edited.key)
         other = bridge.trigger(message(chatID="other"), "server", [], 0)
@@ -66,14 +92,21 @@ class TriggerTests(unittest.TestCase):
         self.assertNotEqual(first.key, other.key)
 
     def test_reference_prompt_preserves_instruction(self) -> None:
-        job = bridge.trigger(message(text="@bb inspect `literal` $(literal)\nand explain"), "server", [], 0)
+        job = bridge.trigger(
+            message(text="@bb inspect `literal` $(literal)\nand explain"),
+            "server",
+            [],
+            0,
+        )
         assert job is not None
         text = bridge.prompt(job)
         self.assertIn('"inspect `literal` $(literal)\nand explain"', text)
         self.assertIn('"repliedToMessageID": "older-message"', text)
         self.assertIn('"timestamp": "2026-11-05T20:00:00Z"', text)
         self.assertIn("Beeper MCP", text)
-        self.assertIn("Read the source conversation for context using Beeper MCP.\nStart", text)
+        self.assertIn(
+            "Read the source conversation for context using Beeper MCP.\nStart", text
+        )
         self.assertNotIn("local Beeper CLI", text)
         source_json = text.split("```json\n", 1)[1].split("\n```", 1)[0]
         self.assertEqual(type(job.source).model_validate_json(source_json), job.source)
@@ -103,26 +136,52 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     def test_spawn_routing_overrides(self) -> None:
-        runner = bridge.Bridge(args(
-            "--machine", "host_test", "--provider", "codex", "--model", "gpt-6.1-sol",
-            "--section", "sec_home", "--reasoning-level", "medium", "--branch", "main",
-        ), self.state)
+        runner = bridge.Bridge(
+            args(
+                "--machine",
+                "host_test",
+                "--provider",
+                "codex",
+                "--model",
+                "gpt-6.1-sol",
+                "--section",
+                "sec_home",
+                "--reasoning-level",
+                "medium",
+                "--branch",
+                "main",
+            ),
+            self.state,
+        )
         argv = runner.spawn_argv()
-        for flag, expected in (("--project", "proj_test"), ("--section", "sec_home"),
-                               ("--model", "gpt-6.1-sol"), ("--reasoning-level", "medium"),
-                               ("--machine", "host_test"), ("--environment-provider", "project-checkout")):
+        for flag, expected in (
+            ("--project", "proj_test"),
+            ("--section", "sec_home"),
+            ("--model", "gpt-6.1-sol"),
+            ("--reasoning-level", "medium"),
+            ("--machine", "host_test"),
+            ("--environment-provider", "project-checkout"),
+        ):
             self.assertEqual(argv[argv.index(flag) + 1], expected)
         inputs = cast(object, json.loads(argv[argv.index("--environment-inputs") + 1]))
-        expected_inputs: dict[str, dict[str, str]] = {"branch": {"kind": "existing", "name": "main"}}
+        expected_inputs: dict[str, dict[str, str]] = {
+            "branch": {"kind": "existing", "name": "main"}
+        }
         self.assertEqual(inputs, expected_inputs)
 
     async def test_two_triggers_reuse_environment_without_checkout(self) -> None:
         runner = bridge.Bridge(args("--environment", "env_main"), self.state)
         runner.since = 0
-        with patch("bridge.command", new=AsyncMock(return_value=spawn_response())) as command:
+        with patch(
+            "bridge.command", new=AsyncMock(return_value=spawn_response())
+        ) as command:
             for message_id in ("first", "second"):
                 sent = message(id=message_id)
-                event: dict[str, object] = {"type": "message.upserted", "chatID": sent["chatID"], "entries": [sent]}
+                event: dict[str, object] = {
+                    "type": "message.upserted",
+                    "chatID": sent["chatID"],
+                    "entries": [sent],
+                }
                 await runner.event(event)
         self.assertEqual(command.await_count, 2)
         for call in command.await_args_list:
@@ -133,12 +192,15 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_structured_cli_error_is_reported(self) -> None:
         import sys
-        program = '''import json,sys
+
+        program = """import json,sys
 print(json.dumps({"ok": False, "error": {"code": "error", "message": "HTTP 409: Cannot checkout branch while another thread is using this workspace"}}))
 print("unstructured private stderr", file=sys.stderr)
 sys.exit(1)
-'''
-        with self.assertRaisesRegex(bridge.CommandError, "HTTP 409: Cannot checkout branch") as caught:
+"""
+        with self.assertRaisesRegex(
+            bridge.CommandError, "HTTP 409: Cannot checkout branch"
+        ) as caught:
             await bridge.command([sys.executable, "-c", program])
         self.assertNotIn("private stderr", str(caught.exception))
 
@@ -166,8 +228,14 @@ sys.exit(1)
 
     async def test_duplicate_edits_and_restarts_spawn_once(self) -> None:
         sent = message()
-        event: dict[str, object] = {"type": "message.upserted", "chatID": sent["chatID"], "entries": [sent]}
-        with patch("bridge.command", new=AsyncMock(return_value=spawn_response())) as command:
+        event: dict[str, object] = {
+            "type": "message.upserted",
+            "chatID": sent["chatID"],
+            "entries": [sent],
+        }
+        with patch(
+            "bridge.command", new=AsyncMock(return_value=spawn_response())
+        ) as command:
             await self.runner.event(event)
             sent["text"] = "@bb edited"
             await self.runner.event(event)
@@ -186,18 +254,34 @@ sys.exit(1)
         self.assertEqual(self.state.jobs()[0]["threadID"], "thr_test")
 
     async def test_partial_event_hydrates_and_captures_reply(self) -> None:
-        event = {"type": "message.upserted", "chatID": message()["chatID"], "ids": ["msg-1"]}
-        with patch.object(self.runner, "beeper", new=AsyncMock(return_value=message())) as beeper:
-            with patch("bridge.command", new=AsyncMock(return_value=spawn_response())) as command:
+        event = {
+            "type": "message.upserted",
+            "chatID": message()["chatID"],
+            "ids": ["msg-1"],
+        }
+        with patch.object(
+            self.runner, "beeper", new=AsyncMock(return_value=message())
+        ) as beeper:
+            with patch(
+                "bridge.command", new=AsyncMock(return_value=spawn_response())
+            ) as command:
                 await self.runner.event(event)
-        beeper.assert_awaited_once_with("messages", "show", "--chat", message()["chatID"], "--id", "msg-1")
+        beeper.assert_awaited_once_with(
+            "messages", "show", "--chat", message()["chatID"], "--id", "msg-1"
+        )
         assert command.await_args is not None
         _, text = cast(tuple[list[str], str], command.await_args.args)
         self.assertIn("older-message", text)
 
     async def test_inbound_and_noncommands_do_not_hydrate(self) -> None:
-        event = {"type": "message.upserted", "chatID": message()["chatID"], "entries": [
-            {"id": "one", "isSender": False}, {"id": "two", "text": "hello"}]}
+        event = {
+            "type": "message.upserted",
+            "chatID": message()["chatID"],
+            "entries": [
+                {"id": "one", "isSender": False},
+                {"id": "two", "text": "hello"},
+            ],
+        }
         with patch.object(self.runner, "beeper", new=AsyncMock()) as beeper:
             await self.runner.event(event)
         beeper.assert_not_awaited()
@@ -207,7 +291,9 @@ sys.exit(1)
         job = bridge.trigger(message(), "server", [], 0)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
-        with patch("bridge.command", new=AsyncMock(side_effect=RuntimeError("transport lost"))) as command:
+        with patch(
+            "bridge.command", new=AsyncMock(side_effect=RuntimeError("transport lost"))
+        ) as command:
             await self.runner.drain()
             await self.runner.drain()
         command.assert_awaited_once()
@@ -232,7 +318,7 @@ sys.exit(1)
 
     async def test_actual_watcher_subprocess_and_stdin_spawn(self) -> None:
         fixture = Path(self.temp.name) / "fake_cli.py"
-        fixture.write_text('''#!/usr/bin/env python3
+        fixture.write_text("""#!/usr/bin/env python3
 import json, sys, time
 from datetime import datetime, timezone
 if sys.argv[1] == 'watch':
@@ -247,14 +333,16 @@ elif sys.argv[1:3] == ['thread', 'spawn']:
     print(json.dumps({'id': 'thr_integration'}))
 else:
     sys.exit(3)
-''')
+""")
         fixture.chmod(0o700)
         self.runner.args.beeper = str(fixture)
         self.runner.args.bb = str(fixture)
         task = asyncio.create_task(self.runner.watch_once())
         try:
             async with asyncio.timeout(5):
-                while not self.state.jobs() or self.state.jobs()[0]["state"] != "spawned":
+                while (
+                    not self.state.jobs() or self.state.jobs()[0]["state"] != "spawned"
+                ):
                     if task.done():
                         task.result()
                     await asyncio.sleep(0.02)
@@ -269,12 +357,20 @@ else:
 
     async def test_timeout_terminates_child(self) -> None:
         import sys
+
         with self.assertRaises(asyncio.TimeoutError):
-            await bridge.command([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.05)
+            await bridge.command(
+                [sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.05
+            )
 
     async def test_reconnects_after_watcher_disconnect(self) -> None:
-        failures: list[BaseException] = [RuntimeError("disconnected"), asyncio.CancelledError()]
-        with patch.object(self.runner, "watch_once", new=AsyncMock(side_effect=failures)) as watch:
+        failures: list[BaseException] = [
+            RuntimeError("disconnected"),
+            asyncio.CancelledError(),
+        ]
+        with patch.object(
+            self.runner, "watch_once", new=AsyncMock(side_effect=failures)
+        ) as watch:
             with patch("bridge.asyncio.sleep", new=AsyncMock()) as sleep:
                 with self.assertRaises(asyncio.CancelledError):
                     await self.runner.run()

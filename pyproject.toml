@@ -14,8 +14,14 @@ package = false
 
 [dependency-groups]
 dev = [
+    "black==26.10.1",
     "mypy>=2.4.1",
 ]
+
+[tool.black]
+required-version = "26.10.1"
+target-version = ["py311"]
+line-length = 88
 
 [tool.mypy]
 python_version = "3.11"

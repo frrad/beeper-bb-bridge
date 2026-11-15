@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Your own @bb Beeper messages → bb threads. Python 3.11+, managed with uv."""
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,15 @@ import time
 from typing import TypedDict, cast
 
 from pydantic import TypeAdapter, ValidationError
-from models import BeeperResponse, CLIErrorResponse, Job, MessagePayload, Source, SpawnResponse, UpsertPayload
+from models import (
+    BeeperResponse,
+    CLIErrorResponse,
+    Job,
+    MessagePayload,
+    Source,
+    SpawnResponse,
+    UpsertPayload,
+)
 
 LOG = logging.getLogger("beeper-bb")
 PREFIX = "@bb "
@@ -55,12 +64,17 @@ def trigger(value: object, target: str, chats: list[str], since: float) -> Job |
     text = message.text
     if text is None or not text.startswith(PREFIX):
         return None
-    instruction = text[len(PREFIX):]
+    instruction = text[len(PREFIX) :]
     if not instruction.strip():
         return None
     assert message.timestamp is not None
-    source = Source(target=target, chatID=message.chatID, messageID=message.id,
-                    timestamp=message.timestamp, repliedToMessageID=message.linkedMessageID)
+    source = Source(
+        target=target,
+        chatID=message.chatID,
+        messageID=message.id,
+        timestamp=message.timestamp,
+        repliedToMessageID=message.linkedMessageID,
+    )
     identity: list[str] = [target, message.chatID, message.id]
     key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
     return Job(key=key, instruction=instruction, source=source)
@@ -121,7 +135,9 @@ class State:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             self.lock.close()
-            raise RuntimeError("Another bridge or state command is using this database") from None
+            raise RuntimeError(
+                "Another bridge or state command is using this database"
+            ) from None
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
@@ -138,31 +154,56 @@ class State:
         self.lock.close()
 
     def enqueue(self, job: Job, argv: list[str]) -> None:
-        self.db.execute("INSERT OR IGNORE INTO jobs VALUES (?,?,?,'pending',NULL,?)",
-                        (job.key, job.model_dump_json(), json.dumps(argv), iso(datetime.now(timezone.utc).timestamp())))
+        self.db.execute(
+            "INSERT OR IGNORE INTO jobs VALUES (?,?,?,'pending',NULL,?)",
+            (
+                job.key,
+                job.model_dump_json(),
+                json.dumps(argv),
+                iso(datetime.now(timezone.utc).timestamp()),
+            ),
+        )
         self.db.commit()
 
     def mark(self, key: str, state: str, thread_id: str | None = None) -> None:
-        self.db.execute("UPDATE jobs SET state=?,thread_id=? WHERE key=?", (state, thread_id, key))
+        self.db.execute(
+            "UPDATE jobs SET state=?,thread_id=? WHERE key=?", (state, thread_id, key)
+        )
         self.db.commit()
 
     def jobs(self) -> list[Receipt]:
         # SQLite's stubs return Any; these column types are owned by our schema.
-        rows = cast(list[tuple[str, str, str | None, str]], self.db.execute(
-            "SELECT key,state,thread_id,created FROM jobs ORDER BY created DESC LIMIT 100"
-        ).fetchall())
-        return [Receipt(key=key, state=state, threadID=thread_id, created=created)
-                for key, state, thread_id, created in rows]
+        rows = cast(
+            list[tuple[str, str, str | None, str]],
+            self.db.execute(
+                "SELECT key,state,thread_id,created FROM jobs ORDER BY created DESC LIMIT 100"
+            ).fetchall(),
+        )
+        return [
+            Receipt(key=key, state=state, threadID=thread_id, created=created)
+            for key, state, thread_id, created in rows
+        ]
 
     def pending(self) -> list[tuple[str, Job, list[str]]]:
-        rows = cast(list[tuple[str, str, str]], self.db.execute(
-            "SELECT key,payload,argv FROM jobs WHERE state='pending' ORDER BY created"
-        ).fetchall())
+        rows = cast(
+            list[tuple[str, str, str]],
+            self.db.execute(
+                "SELECT key,payload,argv FROM jobs WHERE state='pending' ORDER BY created"
+            ).fetchall(),
+        )
         try:
-            return [(key, Job.model_validate_json(payload), TypeAdapter(list[str]).validate_json(argv))
-                    for key, payload, argv in rows]
+            return [
+                (
+                    key,
+                    Job.model_validate_json(payload),
+                    TypeAdapter(list[str]).validate_json(argv),
+                )
+                for key, payload, argv in rows
+            ]
         except ValidationError:
-            raise RuntimeError("Stored job or spawn arguments failed validation") from None
+            raise RuntimeError(
+                "Stored job or spawn arguments failed validation"
+            ) from None
 
 
 async def stop_process(child: asyncio.subprocess.Process) -> None:
@@ -182,10 +223,17 @@ class CommandError(RuntimeError):
     """A failed CLI invocation, with bounded structured error details."""
 
 
-async def command(argv: list[str], stdin: str | None = None, timeout: float = 60) -> object:
-    child = await asyncio.create_subprocess_exec(*argv,
-        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+async def command(
+    argv: list[str], stdin: str | None = None, timeout: float = 60
+) -> object:
+    child = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=(
+            asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL
+        ),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
     output = bytearray()
     stdout = child.stdout
     assert stdout is not None
@@ -198,6 +246,7 @@ async def command(argv: list[str], stdin: str | None = None, timeout: float = 60
                 writer_stream.write(stdin.encode())
                 await writer_stream.drain()
                 writer_stream.close()
+
         writer = asyncio.create_task(write())
         try:
             while chunk := await stdout.read(65536):
@@ -209,16 +258,21 @@ async def command(argv: list[str], stdin: str | None = None, timeout: float = 60
         finally:
             writer.cancel()
             await asyncio.gather(writer, return_exceptions=True)
+
     try:
         await asyncio.wait_for(communicate(), timeout)
         if child.returncode:
             detail = "check its local authentication"
             try:
                 failure = CLIErrorResponse.model_validate_json(output)
-                detail = f"{failure.error.code}: {failure.error.message}".replace("\n", " ")[:500]
+                detail = f"{failure.error.code}: {failure.error.message}".replace(
+                    "\n", " "
+                )[:500]
             except ValidationError:
                 pass
-            raise CommandError(f"{Path(argv[0]).name} command failed (exit {child.returncode}): {detail}")
+            raise CommandError(
+                f"{Path(argv[0]).name} command failed (exit {child.returncode}): {detail}"
+            )
         return cast(object, json.loads(output))
     finally:
         await stop_process(child)
@@ -228,7 +282,9 @@ def beeper_data(value: object) -> object:
     try:
         return BeeperResponse.model_validate(value).data
     except ValidationError:
-        raise RuntimeError("Beeper command failed or returned an unsupported JSON envelope") from None
+        raise RuntimeError(
+            "Beeper command failed or returned an unsupported JSON envelope"
+        ) from None
 
 
 class Bridge:
@@ -239,19 +295,53 @@ class Bridge:
 
     def spawn_argv(self) -> list[str]:
         args = self.args
-        argv = [args.bb, "thread", "spawn", "--project", args.project, "--prompt-file", "-", "--json"]
-        for name, value in (("machine", args.machine), ("provider", args.provider),
-                            ("model", args.model), ("section", args.section),
-                            ("reasoning-level", args.reasoning_level), ("environment", args.environment)):
+        argv = [
+            args.bb,
+            "thread",
+            "spawn",
+            "--project",
+            args.project,
+            "--prompt-file",
+            "-",
+            "--json",
+        ]
+        for name, value in (
+            ("machine", args.machine),
+            ("provider", args.provider),
+            ("model", args.model),
+            ("section", args.section),
+            ("reasoning-level", args.reasoning_level),
+            ("environment", args.environment),
+        ):
             if value:
                 argv.extend(["--" + name, value])
         if args.branch:
-            inputs: dict[str, dict[str, str]] = {"branch": {"kind": "existing", "name": args.branch}}
-            argv.extend(["--environment-provider", "project-checkout", "--environment-inputs", json.dumps(inputs)])
+            inputs: dict[str, dict[str, str]] = {
+                "branch": {"kind": "existing", "name": args.branch}
+            }
+            argv.extend(
+                [
+                    "--environment-provider",
+                    "project-checkout",
+                    "--environment-inputs",
+                    json.dumps(inputs),
+                ]
+            )
         return argv
 
     async def beeper(self, *argv: str) -> object:
-        return beeper_data(await command([self.args.beeper, *argv, "--target", self.args.target, "--json", "--read-only"]))
+        return beeper_data(
+            await command(
+                [
+                    self.args.beeper,
+                    *argv,
+                    "--target",
+                    self.args.target,
+                    "--json",
+                    "--read-only",
+                ]
+            )
+        )
 
     def accept(self, message: object) -> None:
         job = trigger(message, self.args.target, self.args.chat, self.since)
@@ -266,7 +356,9 @@ class Bridge:
                 continue
             self.state.mark(key, "spawning")
             try:
-                result = SpawnResponse.model_validate(await command(argv, prompt(job), timeout=120))
+                result = SpawnResponse.model_validate(
+                    await command(argv, prompt(job), timeout=120)
+                )
                 self.state.mark(key, "spawned", result.id)
                 LOG.info("Created bb thread %s for trigger %s", result.id, key)
             except asyncio.CancelledError:
@@ -274,8 +366,16 @@ class Bridge:
                 raise
             except Exception as error:
                 self.state.mark(key, "uncertain")
-                detail = str(error) if isinstance(error, CommandError) else type(error).__name__
-                LOG.error("Spawn outcome uncertain for %s (%s); inspect bb threads before resolving this receipt", key, detail)
+                detail = (
+                    str(error)
+                    if isinstance(error, CommandError)
+                    else type(error).__name__
+                )
+                LOG.error(
+                    "Spawn outcome uncertain for %s (%s); inspect bb threads before resolving this receipt",
+                    key,
+                    detail,
+                )
 
     async def event(self, value: object) -> None:
         try:
@@ -289,7 +389,11 @@ class Bridge:
             except ValidationError:
                 continue
         known = {entry.id for entry in entries}
-        entries.extend(MessagePayload(id=message_id) for message_id in event.ids if message_id not in known)
+        entries.extend(
+            MessagePayload(id=message_id)
+            for message_id in event.ids
+            if message_id not in known
+        )
         for message in entries:
             if message.isSender is False:
                 continue
@@ -297,23 +401,50 @@ class Bridge:
                 continue
             updates: dict[str, object] = {"chatID": event.chatID}
             message = message.model_copy(update=updates)
-            if timestamp(message.timestamp) is None or message.isSender is None or message.text is None:
+            if (
+                timestamp(message.timestamp) is None
+                or message.isSender is None
+                or message.text is None
+            ):
                 if not message.id:
                     continue
                 try:
-                    message = MessagePayload.model_validate(await self.beeper(
-                        "messages", "show", "--chat", event.chatID, "--id", message.id))
+                    message = MessagePayload.model_validate(
+                        await self.beeper(
+                            "messages",
+                            "show",
+                            "--chat",
+                            event.chatID,
+                            "--id",
+                            message.id,
+                        )
+                    )
                 except ValidationError:
                     continue
             self.accept(message)
         await self.drain()
 
     async def watch_once(self) -> None:
-        argv = [self.args.beeper, "watch", "--target", self.args.target, "--json", "--events", "--read-only", "--include-type", "message.upserted"]
+        argv = [
+            self.args.beeper,
+            "watch",
+            "--target",
+            self.args.target,
+            "--json",
+            "--events",
+            "--read-only",
+            "--include-type",
+            "message.upserted",
+        ]
         for chat in self.args.chat:
             argv += ["--chat", chat]
-        child = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=1024 * 1024)
+        child = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,
+        )
         opened = asyncio.Event()
         stdout_stream, stderr_stream = child.stdout, child.stderr
         assert stdout_stream is not None and stderr_stream is not None
@@ -331,7 +462,10 @@ class Bridge:
             async for line in stderr_stream:
                 try:
                     value = cast(object, json.loads(line))
-                    if isinstance(value, dict) and cast(dict[str, object], value).get("event") == "watch.open":
+                    if (
+                        isinstance(value, dict)
+                        and cast(dict[str, object], value).get("event") == "watch.open"
+                    ):
                         opened.set()
                         self.connected = True
                         LOG.info("Beeper watcher connected")
@@ -365,7 +499,11 @@ class Bridge:
                 await self.watch_once()
             except (OSError, RuntimeError, ValueError, asyncio.TimeoutError) as error:
                 # Only our own error text, never raw CLI output or message bodies.
-                detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+                detail = (
+                    str(error)
+                    if isinstance(error, RuntimeError)
+                    else type(error).__name__
+                )
                 LOG.warning("Watcher unavailable (%s); reconnecting", detail)
             if self.connected and time.monotonic() - started >= 60:
                 backoff = 1
@@ -375,34 +513,68 @@ class Bridge:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--state", type=Path, default=Path.home() / ".local/state/beeper-bb-bridge/state.sqlite3")
+    p.add_argument(
+        "--state",
+        type=Path,
+        default=Path.home() / ".local/state/beeper-bb-bridge/state.sqlite3",
+    )
     sub = p.add_subparsers(dest="action", required=True)
-    run = sub.add_parser("run", help="Watch your own @bb messages and launch bb threads")
-    run.add_argument("--project", required=True, help="Explicit bb destination project ID")
+    run = sub.add_parser(
+        "run", help="Watch your own @bb messages and launch bb threads"
+    )
+    run.add_argument(
+        "--project", required=True, help="Explicit bb destination project ID"
+    )
     run.add_argument("--target", default="server", help="Named Beeper CLI target")
     chat_defaults: list[str] = []
-    run.add_argument("--chat", action="append", default=chat_defaults, help="Allowed chat ID; repeatable (default: all)")
+    run.add_argument(
+        "--chat",
+        action="append",
+        default=chat_defaults,
+        help="Allowed chat ID; repeatable (default: all)",
+    )
     run.add_argument("--beeper", default="beeper", help="Beeper executable path")
     run.add_argument("--bb", default="bb", help="bb executable path")
     for name in ("machine", "provider", "model", "section"):
-        run.add_argument("--" + name, help="Pass an explicit override to bb thread spawn")
-    run.add_argument("--reasoning-level", help="Reasoning level supported by the chosen model")
+        run.add_argument(
+            "--" + name, help="Pass an explicit override to bb thread spawn"
+        )
+    run.add_argument(
+        "--reasoning-level", help="Reasoning level supported by the chosen model"
+    )
     workspace = run.add_mutually_exclusive_group()
-    workspace.add_argument("--branch", help="Select an existing branch in the shared project checkout")
-    workspace.add_argument("--environment", help="Reuse an environment ID or workspace path without checking out a branch")
-    run.add_argument("--dry-run", action="store_true", help="Record matches without spawning; use a separate --state")
+    workspace.add_argument(
+        "--branch", help="Select an existing branch in the shared project checkout"
+    )
+    workspace.add_argument(
+        "--environment",
+        help="Reuse an environment ID or workspace path without checking out a branch",
+    )
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Record matches without spawning; use a separate --state",
+    )
     sub.add_parser("jobs", help="List the latest 100 receipts (stop the runner first)")
-    resolve = sub.add_parser("resolve", help="Resolve an uncertain spawn after inspecting bb (stop runner first)")
+    resolve = sub.add_parser(
+        "resolve",
+        help="Resolve an uncertain spawn after inspecting bb (stop runner first)",
+    )
     resolve.add_argument("key")
     choice = resolve.add_mutually_exclusive_group(required=True)
     choice.add_argument("--thread", help="Record the thread that was created")
-    choice.add_argument("--retry", action="store_true", help="Queue another attempt; can duplicate an unrecorded thread")
+    choice.add_argument(
+        "--retry",
+        action="store_true",
+        help="Queue another attempt; can duplicate an unrecorded thread",
+    )
     return p
 
 
 async def run_until_stopped(bridge: Bridge) -> None:
     task = asyncio.create_task(bridge.run())
     loop = asyncio.get_running_loop()
+
     def cancel_task() -> None:
         task.cancel()
 
@@ -419,7 +591,9 @@ async def run_until_stopped(bridge: Bridge) -> None:
 
 def main() -> int:
     os.umask(0o077)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     args = parser().parse_args(namespace=Options())
     # Dry runs cannot consume real trigger receipts.
     if args.action == "run" and args.dry_run:
@@ -430,9 +604,16 @@ def main() -> int:
             if args.action == "jobs":
                 print(json.dumps(state.jobs(), indent=2))
             elif args.action == "resolve":
-                if cast(object, state.db.execute("SELECT state FROM jobs WHERE key=?", (args.key,)).fetchone()) != ("uncertain",):
+                if cast(
+                    object,
+                    state.db.execute(
+                        "SELECT state FROM jobs WHERE key=?", (args.key,)
+                    ).fetchone(),
+                ) != ("uncertain",):
                     raise RuntimeError("Expected an uncertain receipt key from jobs")
-                state.mark(args.key, "pending" if args.retry else "spawned", args.thread)
+                state.mark(
+                    args.key, "pending" if args.retry else "spawned", args.thread
+                )
             else:
                 asyncio.run(run_until_stopped(Bridge(args, state)))
         finally:
