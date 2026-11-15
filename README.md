@@ -6,7 +6,7 @@ message to point the agent at it.
 
 The prompt contains your instruction, chat/message IDs, timestamp, and replied-to
 message ID. The model uses your existing **Beeper MCP** to fetch context as needed.
-By default, the model is instructed to send its answer back to the source Beeper thread,
+The model can send its answer back to the source Beeper thread,
 prefixed with `bb: `. The script itself starts threads and supplies references;
 it does not assemble transcripts. No bb plugin, inbound HTTP server, or extra
 bot account.
@@ -23,7 +23,7 @@ the same instance.
 git clone https://github.com/frrad/beeper-bb-bridge.git
 cd beeper-bb-bridge
 bb project list --json
-uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server
+uv run --locked bridge.py run --project proj_YOUR_PROJECT --prompt self-contained --target server
 ```
 
 Send `@bb investigate this` in any chat, optionally as a reply. Only your own
@@ -34,13 +34,13 @@ bare `@bb`, leading whitespace, and `@BB` do not trigger work.
 
 ```sh
 # Restrict to a chat and choose the destination machine/provider/model:
-uv run --locked bridge.py run --project proj_YOUR_PROJECT --target server \
+uv run --locked bridge.py run --project proj_YOUR_PROJECT --prompt self-contained --target server \
   --chat '!room:beeper.local' --machine host_YOUR_MACHINE \
   --provider codex --model YOUR_MODEL
 ```
 
-Choose the starting prompt with `--prompt self-contained` (the default) or
-`--prompt skill`. The self-contained prompt includes instructions for retrieving
+The `--prompt` flag is required: choose `--prompt self-contained` or
+`--prompt skill`. There is no default. The self-contained prompt includes instructions for retrieving
 context and replying. The skill prompt starts with `/beeper-message`, followed
 only by your instruction and source references; configure that skill in the
 spawned agent's environment before using this mode.

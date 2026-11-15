@@ -16,7 +16,7 @@ import signal
 import sqlite3
 import sys
 import time
-from typing import TypedDict, cast
+from typing import TypedDict, assert_never, cast
 
 from pydantic import TypeAdapter, ValidationError
 from models import BeeperResponse, CLIErrorResponse, Job, MessagePayload, PromptMode, Source, SpawnResponse, UpsertPayload
@@ -41,7 +41,7 @@ def timestamp(value: object) -> float | None:
 
 
 def trigger(value: object, target: str, chats: list[str], since: float,
-            prompt_mode: PromptMode = PromptMode.SELF_CONTAINED) -> Job | None:
+            prompt_mode: PromptMode) -> Job | None:
     try:
         message = MessagePayload.model_validate(value)
     except ValidationError:
@@ -68,17 +68,16 @@ def trigger(value: object, target: str, chats: list[str], since: float,
 
 
 def prompt(job: Job) -> str:
-    context = f'''The user sent this instruction from their own Beeper account:
+    match job.prompt_mode:
+        case PromptMode.SELF_CONTAINED:
+            return f'''The user sent this instruction from their own Beeper account:
 "{job.instruction}"
 
 Beeper source references (JSON data):
 ```json
 {job.source.model_dump_json(indent=2)}
 ```
-'''
-    if job.prompt_mode == PromptMode.SKILL:
-        return "/beeper-message\n\n" + context
-    return context + '''
+
 Read the source conversation for context using Beeper MCP.
 Start with the chat ID and a time window around the timestamp.
 Message IDs are references, not opaque MCP pagination cursors.
@@ -87,6 +86,19 @@ Respond to the user's query by sending a message in the source Beeper thread,
 prefaced with "bb: ".
 If the source cannot be retrieved, explain that limitation instead of guessing.
 '''
+        case PromptMode.SKILL:
+            return f'''/beeper-message
+
+The user sent this instruction from their own Beeper account:
+"{job.instruction}"
+
+Beeper source references (JSON data):
+```json
+{job.source.model_dump_json(indent=2)}
+```
+'''
+        case _:
+            assert_never(job.prompt_mode)
 
 
 class Options(argparse.Namespace):
@@ -386,8 +398,8 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--project", required=True, help="Explicit bb destination project ID")
     prompt_choices: list[PromptMode] = list(PromptMode)
     run.add_argument("--prompt", type=PromptMode, choices=prompt_choices,
-                     default=PromptMode.SELF_CONTAINED,
-                     help="Starting prompt: self-contained instructions or /beeper-message skill (default: self-contained)")
+                     required=True,
+                     help="Starting prompt: self-contained instructions or /beeper-message skill")
     run.add_argument("--target", default="server", help="Named Beeper CLI target")
     chat_defaults: list[str] = []
     run.add_argument("--chat", action="append", default=chat_defaults, help="Allowed chat ID; repeatable (default: all)")

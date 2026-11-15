@@ -20,19 +20,19 @@ def spawn_response() -> dict[str, str]:
 
 
 def args(*extra: str) -> bridge.Options:
-    return bridge.parser().parse_args(["run", "--project", "proj_test", *extra], namespace=bridge.Options())
+    return bridge.parser().parse_args(["run", "--project", "proj_test", "--prompt", "self-contained", *extra], namespace=bridge.Options())
 
 
 class TriggerTests(unittest.TestCase):
     def test_payload_types_are_strict(self) -> None:
         for changes in ({"isSender": "true"}, {"linkedMessageID": 7}, {"text": 123}):
             with self.subTest(changes=changes):
-                self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
+                self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0, PromptMode.SELF_CONTAINED))
         # Beeper may add fields unrelated to trigger handling.
-        self.assertIsNotNone(bridge.trigger(message(newField="ignored"), "server", [], 0))
+        self.assertIsNotNone(bridge.trigger(message(newField="ignored"), "server", [], 0, PromptMode.SELF_CONTAINED))
 
     def test_job_model_validates_serialized_payload(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.assertEqual(Job.model_validate_json(job.model_dump_json()), job)
         with self.assertRaises(ValidationError):
@@ -47,26 +47,26 @@ class TriggerTests(unittest.TestCase):
                         {"text": "@bb\ninvestigate"}, {"text": "@bb"}, {"text": "@bb "},
                         {"timestamp": "bad"}, {"timestamp": "2026-11-05T20:00:00"}):
             with self.subTest(changes=changes):
-                self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0))
-        job = bridge.trigger(message(text="@bb investigate\nthis"), "server", [], 0)
+                self.assertIsNone(bridge.trigger(message(**changes), "server", [], 0, PromptMode.SELF_CONTAINED))
+        job = bridge.trigger(message(text="@bb investigate\nthis"), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.assertEqual(job.instruction, "investigate\nthis")
 
     def test_age_chat_and_dedup_identity(self) -> None:
-        self.assertIsNone(bridge.trigger(message(), "server", ["another-chat"], 0))
-        self.assertIsNone(bridge.trigger(message(), "server", [], 2_000_000_000))
-        first = bridge.trigger(message(), "server", [], 0)
+        self.assertIsNone(bridge.trigger(message(), "server", ["another-chat"], 0, PromptMode.SELF_CONTAINED))
+        self.assertIsNone(bridge.trigger(message(), "server", [], 2_000_000_000, PromptMode.SELF_CONTAINED))
+        first = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert first is not None
-        edited = bridge.trigger(message(text="@bb different instruction"), "server", [], 0)
+        edited = bridge.trigger(message(text="@bb different instruction"), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert edited is not None
         self.assertEqual(first.key, edited.key)
-        other = bridge.trigger(message(chatID="other"), "server", [], 0)
+        other = bridge.trigger(message(chatID="other"), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert other is not None
         assert other is not None
         self.assertNotEqual(first.key, other.key)
 
     def test_reference_prompt_preserves_instruction(self) -> None:
-        job = bridge.trigger(message(text="@bb inspect `literal` $(literal)\nand explain"), "server", [], 0)
+        job = bridge.trigger(message(text="@bb inspect `literal` $(literal)\nand explain"), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         text = bridge.prompt(job)
         self.assertIn('"inspect `literal` $(literal)\nand explain"', text)
@@ -94,14 +94,15 @@ class TriggerTests(unittest.TestCase):
         ))
 
     def test_prompt_cli_choices(self) -> None:
-        self.assertEqual(args().prompt, PromptMode.SELF_CONTAINED)
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            bridge.parser().parse_args(["run", "--project", "proj_test"], namespace=bridge.Options())
         for mode in PromptMode:
             self.assertEqual(args("--prompt", mode.value).prompt, mode)
         with patch("sys.stderr"), self.assertRaises(SystemExit):
             args("--prompt", "unknown")
 
     def test_legacy_job_defaults_to_self_contained(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         legacy = job.model_dump_json(exclude={"prompt_mode"})
         restored = Job.model_validate_json(legacy)
@@ -110,7 +111,7 @@ class TriggerTests(unittest.TestCase):
 
     def test_suffix_preserved_verbatim(self) -> None:
         suffix = " investigate this\nincluding details  "
-        job = bridge.trigger(message(text="@bb " + suffix), "server", [], 0)
+        job = bridge.trigger(message(text="@bb " + suffix), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.assertEqual(job.instruction, suffix)
         self.assertIn(suffix, bridge.prompt(job))
@@ -183,7 +184,7 @@ sys.exit(1)
         self.assertNotIn("private stderr", str(caught.exception))
 
     async def test_stored_job_is_validated_before_spawning(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         pending = self.state.pending()
@@ -196,7 +197,7 @@ sys.exit(1)
         command.assert_not_awaited()
 
     async def test_malformed_spawn_response_is_uncertain(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         invalid: dict[str, object] = {"id": 123}
@@ -244,7 +245,7 @@ sys.exit(1)
         self.assertFalse(self.state.jobs())
 
     async def test_ambiguous_spawn_never_retries_automatically(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         with patch("bridge.command", new=AsyncMock(side_effect=RuntimeError("transport lost"))) as command:
@@ -254,7 +255,7 @@ sys.exit(1)
         self.assertEqual(self.state.jobs()[0]["state"], "uncertain")
 
     async def test_killed_spawn_becomes_uncertain_on_restart(self) -> None:
-        job = bridge.trigger(message(), "server", [], 0)
+        job = bridge.trigger(message(), "server", [], 0, PromptMode.SELF_CONTAINED)
         assert job is not None
         self.state.enqueue(job, self.runner.spawn_argv())
         self.state.mark(job.key, "spawning")
