@@ -120,6 +120,37 @@ journalctl --user -u beeper-bb-bridge -f
 Run as the same user that configured the CLIs. Starting user services at boot
 without login requires the machine's user-lingering configuration.
 
+### Email alerts for lost authentication
+
+`healthcheck.py` checks the selected target's `/v1/app/setup` endpoint directly,
+using its saved CLI token. It emails through the host's existing `sendmail` when
+login, device verification, or encryption secrets are required, or when the API
+rejects authentication. Other API/network failures alert after three failed
+checks. Alerts contain no tokens, keys, or chat content.
+
+Edit the recipient in `beeper-bb-healthcheck.service`, copy that unit and
+`beeper-bb-healthcheck.timer` into `~/.config/systemd/user/`, then run:
+
+```sh
+uv run --locked healthcheck.py --recipient you@example.com --test-email
+systemctl --user daemon-reload
+systemctl --user enable --now beeper-bb-healthcheck.timer
+systemctl --user start beeper-bb-healthcheck.service
+```
+
+The timer checks every two minutes, independently of the bridge process. It
+sends one email per outage, rearms after recovery, and retries failed mail
+delivery on subsequent checks. A successful `sendmail` exit means the local
+mail transport accepted the message; verify the test email arrives. Mail must
+work as the same user running the timer. For msmtp, ensure that user can read
+the configured account (including any credential file).
+
+The default target config is `~/.beeper/targets/server.json`; override it with
+`--target-file`. Alert state is stored separately in
+`~/.local/state/beeper-bb-bridge/health.json`; `--test-email` does not change it.
+This probes Beeper API readiness, not the bridge's event processing or bb spawn
+success. Check the bridge journal when diagnosing those failures.
+
 ## Development
 
 ```sh
