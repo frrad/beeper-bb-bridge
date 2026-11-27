@@ -151,6 +151,16 @@ The default target config is `~/.beeper/targets/server.json`; override it with
 This probes Beeper API readiness, not the bridge's event processing or bb spawn
 success. Check the bridge journal when diagnosing those failures.
 
+If the user already has Gmail OAuth credentials on this host, pass
+`--gmail-credentials /path/to/credentials.json` to use Gmail directly. This
+works without a local mail transport or root permissions. The JSON must contain
+`refresh_token`, `client_id`, and `client_secret`, and the grant must include
+`gmail.send` (or an equivalent scope) and profile read access. Keep the file
+private. The checker refreshes an access token in memory for each email and
+does not change the shared credentials file. Add this option to the unit's
+`ExecStart` as well as the `--test-email` command. Transport errors leave the
+alert unacknowledged so the next timer check retries delivery.
+
 ## Development
 
 ```sh
