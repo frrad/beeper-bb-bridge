@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Beeper authentication and email on failure
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Edit the recipient and checkout path before installing.
+ExecStart=%h/.local/bin/uv run --locked --directory %h/Projects/beeper-bb-bridge healthcheck.py --recipient REPLACE_ME@example.com
+TimeoutStartSec=90
+UMask=0077
